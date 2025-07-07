@@ -54,7 +54,7 @@ def connect_to_tws(app: EClient, client_id: int = 2) -> bool:
                 time.sleep(0.1)
                 if app.isConnected():
                     return True
-            
+
             app.disconnect()
 
         except Exception:

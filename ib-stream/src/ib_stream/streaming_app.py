@@ -14,7 +14,12 @@ from ibapi.common import TickAttribBidAsk, TickAttribLast
 from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 
-from .utils import format_timestamp
+from .formatters import (
+    TickFormatter,
+    TimeSalesFormatter,
+    BidAskFormatter,
+    MidPointFormatter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,31 @@ class StreamingApp(EWrapper, EClient):
         """Called when contract details are complete."""
         logger.info("Contract details received")
 
+    def _process_tick(self, reqId: int, formatter: TickFormatter):
+        """Central method to process any type of tick data"""
+        if self.streaming_stopped:
+            return
+
+        self.tick_count += 1
+
+        # Output the tick data
+        if self.json_output:
+            print(json.dumps(formatter.to_json()))
+        else:
+            print(formatter.to_console())
+
+        # Check if we've reached the limit
+        if self.max_ticks and self.tick_count >= self.max_ticks:
+            self.streaming_stopped = True
+            if not self.json_output:
+                print(f"\nReached limit of {self.max_ticks} ticks")
+            self.cancelTickByTickData(reqId)
+            # Small delay to allow cancel to process
+            import time
+
+            time.sleep(0.1)
+            self.disconnect()
+
     def tickByTickAllLast(
         self,
         reqId: int,
@@ -87,50 +117,16 @@ class StreamingApp(EWrapper, EClient):
         specialConditions: str,
     ):
         """Handle Last and AllLast tick data (time & sales)."""
-        if self.streaming_stopped:
-            return
-        self.tick_count += 1
-
-        timestamp = format_timestamp(time)
-        tick_type_str = "Last" if tickType == 1 else "AllLast"
-
-        if self.json_output:
-            data = {
-                "type": "time_sales",
-                "tick_type": tick_type_str,
-                "timestamp": timestamp,
-                "unix_time": time,
-                "price": price,
-                "size": float(size),
-                "exchange": exchange,
-                "conditions": specialConditions,
-                "past_limit": tickAttribLast.pastLimit,
-                "unreported": tickAttribLast.unreported,
-            }
-            print(json.dumps(data))
-        else:
-            conditions = f" [{specialConditions}]" if specialConditions else ""
-            flags = []
-            if tickAttribLast.pastLimit:
-                flags.append("PL")
-            if tickAttribLast.unreported:
-                flags.append("UR")
-            flag_str = f" ({','.join(flags)})" if flags else ""
-
-            print(
-                f"{timestamp} | {price:10.4f} | {size:10} | {exchange:^8} {conditions}{flag_str}"
-            )
-
-        # Check if we've reached the limit
-        if self.max_ticks and self.tick_count >= self.max_ticks:
-            self.streaming_stopped = True
-            if not self.json_output:
-                print(f"\nReached limit of {self.max_ticks} ticks")
-            self.cancelTickByTickData(reqId)
-            # Small delay to allow cancel to process
-            import time
-            time.sleep(0.1)
-            self.disconnect()
+        formatter = TimeSalesFormatter(
+            tick_type=tickType,
+            timestamp=time,
+            price=price,
+            size=size,
+            exchange=exchange,
+            special_conditions=specialConditions,
+            tick_attrib=tickAttribLast,
+        )
+        self._process_tick(reqId, formatter)
 
     def tickByTickBidAsk(
         self,
@@ -143,77 +139,20 @@ class StreamingApp(EWrapper, EClient):
         tickAttribBidAsk: TickAttribBidAsk,
     ):
         """Handle BidAsk tick data."""
-        if self.streaming_stopped:
-            return
-        self.tick_count += 1
-
-        timestamp = format_timestamp(time)
-
-        if self.json_output:
-            data = {
-                "type": "bid_ask",
-                "timestamp": timestamp,
-                "unix_time": time,
-                "bid_price": bidPrice,
-                "ask_price": askPrice,
-                "bid_size": float(bidSize),
-                "ask_size": float(askSize),
-                "bid_past_low": tickAttribBidAsk.bidPastLow,
-                "ask_past_high": tickAttribBidAsk.askPastHigh,
-            }
-            print(json.dumps(data))
-        else:
-            flags = []
-            if tickAttribBidAsk.bidPastLow:
-                flags.append("BPL")
-            if tickAttribBidAsk.askPastHigh:
-                flags.append("APH")
-            flag_str = f" ({','.join(flags)})" if flags else ""
-
-            print(
-                f"{timestamp} | Bid: {bidPrice:10.4f} x {bidSize:6} | Ask: {askPrice:10.4f} x {askSize:6}{flag_str}"
-            )
-
-        # Check if we've reached the limit
-        if self.max_ticks and self.tick_count >= self.max_ticks:
-            self.streaming_stopped = True
-            if not self.json_output:
-                print(f"\nReached limit of {self.max_ticks} ticks")
-            self.cancelTickByTickData(reqId)
-            # Small delay to allow cancel to process
-            import time
-            time.sleep(0.1)
-            self.disconnect()
+        formatter = BidAskFormatter(
+            timestamp=time,
+            bid_price=bidPrice,
+            ask_price=askPrice,
+            bid_size=bidSize,
+            ask_size=askSize,
+            tick_attrib=tickAttribBidAsk,
+        )
+        self._process_tick(reqId, formatter)
 
     def tickByTickMidPoint(self, reqId: int, time: int, midPoint: float):
         """Handle MidPoint tick data."""
-        if self.streaming_stopped:
-            return
-        self.tick_count += 1
-
-        timestamp = format_timestamp(time)
-
-        if self.json_output:
-            data = {
-                "type": "midpoint",
-                "timestamp": timestamp,
-                "unix_time": time,
-                "midpoint": midPoint,
-            }
-            print(json.dumps(data))
-        else:
-            print(f"{timestamp} | MidPoint: {midPoint:10.4f}")
-
-        # Check if we've reached the limit
-        if self.max_ticks and self.tick_count >= self.max_ticks:
-            self.streaming_stopped = True
-            if not self.json_output:
-                print(f"\nReached limit of {self.max_ticks} ticks")
-            self.cancelTickByTickData(reqId)
-            # Small delay to allow cancel to process
-            import time
-            time.sleep(0.1)
-            self.disconnect()
+        formatter = MidPointFormatter(timestamp=time, midpoint=midPoint)
+        self._process_tick(reqId, formatter)
 
     def stream_contract(self, contract_id: int, tick_type: str = "Last"):
         """Start streaming tick-by-tick data for a contract."""

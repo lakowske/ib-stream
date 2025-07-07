@@ -83,7 +83,7 @@ Notes:
         action="store_true",
         help="Enable verbose logging",
     )
-    
+
     parser.add_argument(
         "--client-id",
         type=int,
