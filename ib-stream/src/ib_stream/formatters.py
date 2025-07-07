@@ -4,7 +4,7 @@ Tick data formatters for different types of market data
 
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Dict, Any
+from typing import Any, Dict
 
 from ibapi.common import TickAttribBidAsk, TickAttribLast
 

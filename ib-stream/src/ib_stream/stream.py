@@ -20,19 +20,19 @@ def parse_arguments():
 Examples:
   # Stream time & sales for Apple stock (using contract ID)
   ib-stream 265598
-  
+
   # Stream only 20 ticks
   ib-stream 265598 --number 20
-  
+
   # Stream bid/ask data instead of trades
   ib-stream 265598 --type BidAsk
-  
+
   # Stream all trades including unreported
   ib-stream 265598 --type AllLast
-  
+
   # Output as JSON for processing
   ib-stream 265598 --json
-  
+
   # Combine options
   ib-stream 265598 --type BidAsk --number 50 --json
 
