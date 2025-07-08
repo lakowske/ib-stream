@@ -130,11 +130,13 @@ async def root():
         "version": "1.0.0",
         "description": "Real-time streaming market data via Server-Sent Events",
         "endpoints": {
-            "/stream/{contract_id}": "Stream market data for a contract",
+            "/stream/{contract_id}": "Stream market data for a contract with query parameters",
             "/stream/{contract_id}/{tick_type}": "Stream specific tick type data",
             "/health": "Health check with TWS connection status",
             "/stream/info": "Available tick types and streaming capabilities",
             "/stream/active": "List currently active streams",
+            "DELETE /stream/{contract_id}": "Stop all streams for a specific contract",
+            "DELETE /stream/all": "Stop all active streams",
         },
         "tick_types": ["Last", "AllLast", "BidAsk", "MidPoint"],
         "configuration": {
@@ -203,84 +205,95 @@ async def stream_info():
 
 async def stream_contract_data(contract_id: int, tick_type: str, limit: Optional[int] = None,
                               timeout: Optional[int] = None) -> AsyncGenerator[Any, None]:
-    """Stream contract data via SSE"""
+    """Stream contract data via SSE using StreamManager for isolation"""
+    from .stream_manager import stream_manager, StreamHandler
+    
     if timeout is None:
         timeout = config.default_timeout_seconds
 
     # Check if we're at max streams
-    with stream_lock:
-        if len(active_streams) >= config.max_concurrent_streams:
-            event = create_rate_limit_error_event(contract_id)
-            yield event
-            return
+    current_stream_count = stream_manager.get_stream_count()
+    if current_stream_count >= config.max_concurrent_streams:
+        event = create_rate_limit_error_event(contract_id)
+        yield event
+        return
 
+    # Generate unique request ID
+    import time
+    import random
+    req_id = int(time.time() * 1000) % 100000 + random.randint(1, 999)
+    
     # Create event queue for this stream
     event_queue = asyncio.Queue()
     stream_id = f"{contract_id}_{tick_type}_{id(event_queue)}"
+    
+    logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s", 
+                contract_id, tick_type, limit, timeout)
+    logger.info("Starting stream %s for contract %d", stream_id, contract_id)
+    logger.info("Using request ID %d for stream %s", req_id, stream_id)
 
     try:
-        # Create streaming app with callbacks
-        def on_tick(tick_data: Dict[str, Any]):
-            event = SSETickEvent(contract_id, tick_data)
-            try:
-                event_queue.put_nowait(event)
-            except asyncio.QueueFull:
-                logger.warning("Event queue full for stream %s", stream_id)
-
-        def on_error(error_code: str, message: str):
-            event = SSEErrorEvent(contract_id, error_code, message)
-            try:
-                event_queue.put_nowait(event)
-            except asyncio.QueueFull:
-                logger.warning("Event queue full for stream %s", stream_id)
-
-        def on_complete(reason: str, total_ticks: int):
-            event = SSECompleteEvent(contract_id, reason, total_ticks)
-            try:
-                event_queue.put_nowait(event)
-            except asyncio.QueueFull:
-                logger.warning("Event queue full for stream %s", stream_id)
-
         # Get TWS connection
         app_instance = ensure_tws_connection()
         
-        # Use the existing global TWS connection instead of creating a new one
-        # This preserves the server version and connection state
-        streaming_app = app_instance
-        
-        # Store original callbacks to restore later
-        original_max_ticks = getattr(streaming_app, 'max_ticks', None)
-        original_tick_callback = getattr(streaming_app, 'tick_callback', None)
-        original_error_callback = getattr(streaming_app, 'error_callback', None)
-        original_complete_callback = getattr(streaming_app, 'complete_callback', None)
-        
-        # Set callbacks for this stream
-        streaming_app.max_ticks = limit
-        streaming_app.tick_callback = on_tick
-        streaming_app.error_callback = on_error
-        streaming_app.complete_callback = on_complete
+        # Create callback functions for SSE events
+        async def on_tick(tick_data: Dict[str, Any]):
+            event = SSETickEvent(contract_id, tick_data)
+            try:
+                await event_queue.put(event)
+            except Exception as e:
+                logger.warning("Failed to queue tick event for stream %s: %s", stream_id, e)
 
-        # Register stream
+        async def on_error(error_code: str, message: str):
+            event = SSEErrorEvent(contract_id, error_code, message)
+            try:
+                await event_queue.put(event)
+            except Exception as e:
+                logger.warning("Failed to queue error event for stream %s: %s", stream_id, e)
+
+        async def on_complete(reason: str, total_ticks: int):
+            event = SSECompleteEvent(contract_id, reason, total_ticks)
+            try:
+                await event_queue.put(event)
+            except Exception as e:
+                logger.warning("Failed to queue complete event for stream %s: %s", stream_id, e)
+
+        # Create StreamHandler for this stream
+        stream_handler = StreamHandler(
+            request_id=req_id,
+            contract_id=contract_id,
+            tick_type=tick_type,
+            limit=limit,
+            timeout=timeout,
+            tick_callback=on_tick,
+            error_callback=on_error,
+            complete_callback=on_complete
+        )
+        
+        # Set the request ID on the app instance BEFORE registering anything
+        app_instance.req_id = req_id
+        
+        # Register the stream with StreamManager
+        stream_manager.register_stream(stream_handler)
+        
+        # Register stream in active_streams for tracking
         with stream_lock:
             active_streams[stream_id] = {
                 "contract_id": contract_id,
                 "tick_type": tick_type,
                 "start_time": datetime.now(),
-                "app": streaming_app,
+                "request_id": req_id,
+                "app": app_instance,
                 "queue": event_queue
             }
-
-        logger.info("Starting stream %s for contract %d", stream_id, contract_id)
 
         # Start streaming in background
         async def start_stream():
             try:
-                # Get unique request ID
-                req_id = len(active_streams) + 1000
-                streaming_app.req_id = req_id
+                logger.info("Starting TWS stream for request ID %d", req_id)
 
-                # Start streaming
-                streaming_app.stream_contract(contract_id, tick_type)
+                # Start streaming - this will route through StreamManager
+                app_instance.stream_contract(contract_id, tick_type)
 
                 # Send start event
                 start_event = create_stream_started_event(contract_id, tick_type)
@@ -300,8 +313,8 @@ async def stream_contract_data(contract_id: int, tick_type: str, limit: Optional
         start_time = time.time()
         while True:
             try:
-                # Check timeout
-                if time.time() - start_time > timeout:
+                # Check timeout only if one is set
+                if timeout is not None and time.time() - start_time > timeout:
                     timeout_event = create_timeout_error_event(contract_id, timeout)
                     yield timeout_event
                     break
@@ -325,28 +338,85 @@ async def stream_contract_data(contract_id: int, tick_type: str, limit: Optional
                 break
 
     finally:
-        # Restore original callbacks
-        try:
-            streaming_app.max_ticks = original_max_ticks
-            streaming_app.tick_callback = original_tick_callback
-            streaming_app.error_callback = original_error_callback
-            streaming_app.complete_callback = original_complete_callback
-        except:
-            pass
+        # Unregister from StreamManager
+        stream_manager.unregister_stream(req_id)
         
         # Clean up
         with stream_lock:
             if stream_id in active_streams:
                 try:
                     app_data = active_streams[stream_id]
-                    if "app" in app_data:
-                        app_data["app"].cancelTickByTickData(app_data["app"].req_id)
+                    if "app" in app_data and "request_id" in app_data:
+                        app_data["app"].cancelTickByTickData(app_data["request_id"])
+                        # Clean up request-specific data
+                        app_data["app"].cleanup_request(app_data["request_id"])
                 except Exception as e:
                     import traceback
                     logger.error("Error cleaning up stream %s: %s\nTraceback:\n%s", stream_id, e, traceback.format_exc())
                 del active_streams[stream_id]
 
         logger.info("Stream %s ended", stream_id)
+
+
+@app.get("/stream/active")
+async def get_active_streams():
+    """Get list of currently active streams"""
+    with stream_lock:
+        streams = []
+        for stream_id, stream_data in active_streams.items():
+            streams.append({
+                "stream_id": stream_id,
+                "contract_id": stream_data["contract_id"],
+                "tick_type": stream_data["tick_type"],
+                "start_time": stream_data["start_time"].isoformat(),
+                "duration_seconds": int((datetime.now() - stream_data["start_time"]).total_seconds())
+            })
+
+        return {
+            "active_streams": streams,
+            "total_streams": len(streams),
+            "max_streams": config.max_concurrent_streams
+        }
+
+
+@app.get("/stream/{contract_id}/{tick_type}")
+async def stream_contract_with_type(
+    contract_id: int,
+    tick_type: str,
+    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
+    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+):
+    """Stream market data for a contract with explicit tick type via Server-Sent Events"""
+    
+    # Validate tick type
+    if not is_valid_tick_type(tick_type):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(['Last', 'AllLast', 'BidAsk', 'MidPoint'])}"
+        )
+    
+    # Validate limit
+    if limit is not None and (limit < 1 or limit > 10000):
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 10000"
+        )
+    
+    # Validate timeout
+    if timeout is not None and (timeout < 5 or timeout > 3600):
+        raise HTTPException(
+            status_code=400,
+            detail="Timeout must be between 5 and 3600 seconds"
+        )
+    
+    logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s",
+                contract_id, tick_type, limit, timeout)
+    
+    # Create event generator
+    events = stream_contract_data(contract_id, tick_type, limit, timeout)
+    
+    # Return SSE response
+    return create_sse_response(events)
 
 
 @app.get("/stream/{contract_id}")
@@ -389,25 +459,76 @@ async def stream_contract(
     return create_sse_response(events)
 
 
-@app.get("/stream/active")
-async def get_active_streams():
-    """Get list of currently active streams"""
+@app.delete("/stream/all")
+async def stop_all_streams():
+    """Stop all active streams"""
+    stopped_streams = []
+    
     with stream_lock:
-        streams = []
-        for stream_id, stream_data in active_streams.items():
-            streams.append({
-                "stream_id": stream_id,
-                "contract_id": stream_data["contract_id"],
-                "tick_type": stream_data["tick_type"],
-                "start_time": stream_data["start_time"].isoformat(),
-                "duration_seconds": int((datetime.now() - stream_data["start_time"]).total_seconds())
-            })
+        # Stop all streams
+        for stream_id, stream_data in list(active_streams.items()):
+            try:
+                if "app" in stream_data:
+                    stream_data["app"].cancelTickByTickData(stream_data["app"].req_id)
+                stopped_streams.append({
+                    "stream_id": stream_id,
+                    "contract_id": stream_data["contract_id"],
+                    "tick_type": stream_data["tick_type"],
+                    "duration_seconds": int((datetime.now() - stream_data["start_time"]).total_seconds())
+                })
+                logger.info("Stopped stream %s", stream_id)
+            except Exception as e:
+                logger.error("Error stopping stream %s: %s", stream_id, e)
+        
+        # Clear all active streams
+        active_streams.clear()
+    
+    return {
+        "message": f"Stopped {len(stopped_streams)} streams",
+        "stopped_streams": stopped_streams,
+        "timestamp": datetime.now().isoformat()
+    }
 
-        return {
-            "active_streams": streams,
-            "total_streams": len(streams),
-            "max_streams": config.max_concurrent_streams
-        }
+
+@app.delete("/stream/{contract_id}")
+async def stop_contract_streams(contract_id: int):
+    """Stop all active streams for a specific contract"""
+    stopped_streams = []
+    
+    with stream_lock:
+        # Find all streams for this contract
+        streams_to_stop = []
+        for stream_id, stream_data in active_streams.items():
+            if stream_data["contract_id"] == contract_id:
+                streams_to_stop.append((stream_id, stream_data))
+        
+        # Stop each stream
+        for stream_id, stream_data in streams_to_stop:
+            try:
+                if "app" in stream_data:
+                    stream_data["app"].cancelTickByTickData(stream_data["app"].req_id)
+                stopped_streams.append({
+                    "stream_id": stream_id,
+                    "contract_id": contract_id,
+                    "tick_type": stream_data["tick_type"],
+                    "duration_seconds": int((datetime.now() - stream_data["start_time"]).total_seconds())
+                })
+                del active_streams[stream_id]
+                logger.info("Stopped stream %s for contract %d", stream_id, contract_id)
+            except Exception as e:
+                logger.error("Error stopping stream %s: %s", stream_id, e)
+    
+    if not stopped_streams:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active streams found for contract {contract_id}"
+        )
+    
+    return {
+        "message": f"Stopped {len(stopped_streams)} streams for contract {contract_id}",
+        "stopped_streams": stopped_streams,
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 def main():

@@ -4,7 +4,7 @@ Configuration management for IB Stream API Server.
 
 import os
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -18,7 +18,7 @@ class ServerConfig:
 
     # Streaming Limits
     max_concurrent_streams: int = 50
-    default_timeout_seconds: int = 300
+    default_timeout_seconds: Optional[int] = None  # No timeout by default
     buffer_size: int = 100
 
     # Connection Management
@@ -55,7 +55,10 @@ def load_config_from_env() -> ServerConfig:
 
     # Streaming Limits
     config.max_concurrent_streams = int(os.getenv("IB_STREAM_MAX_STREAMS", config.max_concurrent_streams))
-    config.default_timeout_seconds = int(os.getenv("IB_STREAM_STREAM_TIMEOUT", config.default_timeout_seconds))
+    # Handle timeout - can be None for no timeout
+    timeout_env = os.getenv("IB_STREAM_STREAM_TIMEOUT")
+    if timeout_env:
+        config.default_timeout_seconds = int(timeout_env)
     config.buffer_size = int(os.getenv("IB_STREAM_BUFFER_SIZE", config.buffer_size))
 
     # Connection Management
@@ -82,7 +85,7 @@ def validate_config(config: ServerConfig) -> None:
     if config.max_concurrent_streams < 1:
         raise ValueError("Maximum concurrent streams must be at least 1")
 
-    if config.default_timeout_seconds < 1:
+    if config.default_timeout_seconds is not None and config.default_timeout_seconds < 1:
         raise ValueError("Default timeout must be at least 1 second")
 
     if config.buffer_size < 1:

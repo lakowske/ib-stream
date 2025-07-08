@@ -42,10 +42,11 @@ This document specifies the design and implementation of a FastAPI-based HTTP se
 
 ### Core Components
 
-1. **StreamManager**: Manages multiple concurrent streams and client subscriptions
-2. **SSEStreamingResponse**: Handles Server-Sent Events formatting and delivery
-3. **StreamingApp**: Enhanced version of existing CLI streaming application
-4. **ConnectionManager**: TWS connection lifecycle and client ID management
+1. **StreamManager**: Central registry that routes tick data to appropriate stream handlers based on request ID, preventing cross-contamination between concurrent streams
+2. **StreamHandler**: Isolated per-stream instance managing individual stream state (tick counts, limits, callbacks) for each active client request
+3. **SSEStreamingResponse**: Handles Server-Sent Events formatting and delivery
+4. **StreamingApp**: Enhanced with request-ID routing capabilities while maintaining single TWS connection for efficiency
+5. **ConnectionManager**: TWS connection lifecycle and client ID management
 
 ## API Endpoints
 
@@ -308,9 +309,38 @@ uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8000 --workers 1
 - Essential error handling
 
 ### Phase 2: Stream Management
-- Multiple client support
-- Stream lifecycle management
-- Health and management endpoints
+- **StreamManager Architecture**: Request-ID based stream isolation
+- **Multiple Client Support**: Concurrent streams without cross-contamination  
+- **Stream Lifecycle Management**: Per-stream state isolation and cleanup
+- **Health and Management Endpoints**: Stream monitoring and diagnostics
+
+#### StreamManager Architecture
+
+The core challenge in multi-stream support is preventing data cross-contamination between concurrent streams. The StreamManager implements request-ID based routing to ensure each stream receives only its intended contract data.
+
+**Key Components:**
+
+1. **StreamManager**: Central registry that routes incoming tick data to correct stream handlers based on request ID
+2. **StreamHandler**: Isolated per-stream instance with own state (tick_count, limits, callbacks)
+3. **Enhanced StreamingApp**: Modified to route callbacks by request_id while maintaining single TWS connection
+
+**Request-ID Based Isolation:**
+```
+TWS Connection (Single)
+    ↓ tick data with request_id
+StreamManager.route_tick_data(request_id, data)
+    ↓ routes to correct handler
+StreamHandler[request_id].process_tick(data)
+    ↓ isolated processing
+Client SSE Stream (isolated)
+```
+
+**Stream Isolation Benefits:**
+- Multiple contracts (MNQ, MES, AAPL) can stream simultaneously
+- Each stream maintains independent state (limits, tick counts)
+- Stopping one stream doesn't affect others
+- Contract-specific data validation and price range checking
+- Proper cleanup prevents memory leaks
 
 ### Phase 3: Production Readiness
 - Performance optimization

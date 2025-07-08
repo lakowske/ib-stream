@@ -2,6 +2,7 @@
 Streaming application for IB tick-by-tick data
 """
 
+import asyncio
 import json
 import logging
 import signal
@@ -38,7 +39,8 @@ class StreamingApp(EWrapper, EClient):
         self.tick_count = 0
         self.req_id = 1000
         self.connected = False
-        self.contract_details = None
+        self.contract_details = None  # Keep for backward compatibility
+        self.contract_details_by_req_id = {}  # Store contract details per request ID
         self.streaming_stopped = False
 
         # Callback functions for API server
@@ -88,8 +90,11 @@ class StreamingApp(EWrapper, EClient):
         self.connected = True
         logger.info(f"Connected. Next valid order ID: {orderId}")
 
-    def contractDetails(self, _reqId, contractDetails):
+    def contractDetails(self, reqId, contractDetails):
         """Receive contract details."""
+        # Store contract details by request ID to avoid race conditions
+        self.contract_details_by_req_id[reqId] = contractDetails
+        # Keep backward compatibility
         self.contract_details = contractDetails
         contract = contractDetails.contract
         if not self.json_output:
@@ -104,7 +109,36 @@ class StreamingApp(EWrapper, EClient):
         logger.info("Contract details received")
 
     def _process_tick(self, reqId: int, formatter: TickFormatter):
-        """Central method to process any type of tick data"""
+        """Central method to process any type of tick data with StreamManager routing"""
+        
+        # First try to route through StreamManager for API server mode
+        try:
+            from .stream_manager import stream_manager
+            
+            # Create event loop if we're in an async context
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule the async routing as a task
+                    asyncio.create_task(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    return
+                else:
+                    # Run the async method
+                    asyncio.run(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    return
+            except RuntimeError:
+                # No event loop, try to create one
+                try:
+                    asyncio.run(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    return
+                except Exception:
+                    # Fall back to legacy mode
+                    pass
+        except ImportError:
+            # StreamManager not available, fall back to legacy mode
+            pass
+        
+        # Legacy mode for CLI usage and fallback
         if self.streaming_stopped:
             return
 
@@ -196,21 +230,24 @@ class StreamingApp(EWrapper, EClient):
         # Request contract details first
         self.reqContractDetails(self.req_id, contract)
 
-        # Wait for contract details
+        # Wait for contract details for this specific request ID
         timeout = 5
         start_time = time.time()
-        while self.contract_details is None and (time.time() - start_time) < timeout:
+        while self.req_id not in self.contract_details_by_req_id and (time.time() - start_time) < timeout:
             time.sleep(0.1)
 
-        if self.contract_details is None:
+        if self.req_id not in self.contract_details_by_req_id:
             if not self.json_output:
                 print(f"Error: Could not find contract with ID {contract_id}")
             return
 
-        # Request tick-by-tick data
+        # Get contract details for this specific request ID
+        contract_details = self.contract_details_by_req_id[self.req_id]
+
+        # Request tick-by-tick data using the correct contract
         self.reqTickByTickData(
             reqId=self.req_id,
-            contract=self.contract_details.contract,
+            contract=contract_details.contract,
             tickType=tick_type,
             numberOfTicks=0,  # 0 means unlimited
             ignoreSize=False,
@@ -221,3 +258,8 @@ class StreamingApp(EWrapper, EClient):
             if self.max_ticks:
                 print(f"Will stop after {self.max_ticks} ticks")
             print()
+
+    def cleanup_request(self, req_id):
+        """Clean up data for a specific request ID."""
+        if req_id in self.contract_details_by_req_id:
+            del self.contract_details_by_req_id[req_id]
