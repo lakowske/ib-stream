@@ -1,5 +1,17 @@
 # Project Commands
 
+## Quick Start - Start Both Servers
+
+```bash
+# From the ib-stream directory, start both servers:
+bd start --name ib-stream -- uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8001
+cd ib-contract && bd start --name ib-contracts -- uvicorn api_server:app --host 0.0.0.0 --port 8000 && cd ..
+
+# Check both are running:
+curl -s http://localhost:8001/health | jq .status
+curl -s http://localhost:8000/health | jq .status
+```
+
 ## Server Management with Backdrop
 
 This project uses backdrop (`bd`) for managing server processes in the background with automatic logging.
@@ -7,18 +19,26 @@ This project uses backdrop (`bd`) for managing server processes in the backgroun
 ### Start the Servers
 
 ```bash
-# Start the streaming API server (port 8001)
+# Start the streaming API server (port 8001) - from ib-stream directory
 bd start --name ib-stream -- uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8001
 
-# Start the contract lookup server (port 8000)
-bd start --name ib-contracts -- uvicorn ib_stream.contract_server:app --host 0.0.0.0 --port 8000
+# Start the contract lookup server (port 8000) - from ib-contract directory
+cd ib-contract && bd start --name ib-contracts -- uvicorn api_server:app --host 0.0.0.0 --port 8000
 
 # Start streaming server with hot reload for development
 bd start --name ib-stream-dev -- uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8001 --reload
 
+# Start contract server with hot reload for development
+cd ib-contract && bd start --name ib-contracts-dev -- uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
+
 # Start with custom log level
 bd start --name ib-stream -- uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8001 --log-level debug
 ```
+
+**Important Notes:**
+- The ib-stream server module is `ib_stream.api_server` (with underscore)
+- The ib-contract server module is just `api_server` (in the root of ib-contract directory)
+- You must be in the `ib-contract` directory to start the contract server
 
 ### Server Management
 
@@ -66,15 +86,15 @@ bd logs ib-contracts
 ```bash
 # Start development servers with hot reload
 bd start --name ib-stream-dev -- uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8001 --reload
-bd start --name ib-contracts-dev -- uvicorn ib_stream.contract_server:app --host 0.0.0.0 --port 8000 --reload
+cd ib-contract && bd start --name ib-contracts-dev -- uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
 
 # Watch logs in another terminal
 bd logs ib-stream-dev --follow
-bd logs ib-contracts-dev --follow
+cd ib-contract && bd logs ib-contracts-dev --follow
 
 # Stop development servers when done
 bd stop ib-stream-dev
-bd stop ib-contracts-dev
+cd ib-contract && bd stop ib-contracts-dev
 ```
 
 ## Log Files

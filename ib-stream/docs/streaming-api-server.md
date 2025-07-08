@@ -58,8 +58,7 @@ This document specifies the design and implementation of a FastAPI-based HTTP se
 - **GET /stream/info** - Available tick types and streaming capabilities
 
 #### Streaming Endpoints
-- **GET /stream/{contract_id}** - Stream market data with query parameters
-- **GET /stream/{contract_id}/{tick_type}** - Stream specific tick type data
+- **GET /stream/{contract_id}/{tick_type}** - Stream specific tick type data for a contract
 
 #### Management Endpoints
 - **GET /stream/active** - List currently active streams
@@ -68,14 +67,12 @@ This document specifies the design and implementation of a FastAPI-based HTTP se
 
 ### Query Parameters
 
-Map CLI options to HTTP query parameters:
+The stream endpoint accepts the following optional query parameters:
 
 | Parameter | Type | Default | Description | CLI Equivalent |
 |-----------|------|---------|-------------|----------------|
 | `limit` | integer | unlimited | Number of ticks before auto-stop | `--number` |
-| `tick_type` | enum | "Last" | Data type to stream | `--type` |
-| `timeout` | integer | 300 | Stream timeout in seconds | N/A |
-| `format` | enum | "sse" | Response format (sse only for now) | `--json` |
+| `timeout` | integer | unlimited | Stream timeout in seconds | N/A |
 
 #### Tick Types
 - `Last` - Regular trades during market hours
@@ -147,13 +144,13 @@ uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8000
 
 ```bash
 # Stream bid/ask data for Apple stock
-curl -N "http://localhost:8000/stream/265598?tick_type=BidAsk&limit=100"
+curl -N "http://localhost:8000/stream/265598/BidAsk?limit=100"
 
 # Stream unlimited trades with 5-minute timeout
-curl -N "http://localhost:8000/stream/265598?tick_type=Last&timeout=300"
+curl -N "http://localhost:8000/stream/265598/Last?timeout=300"
 
 # Stream 50 midpoint calculations
-curl -N "http://localhost:8000/stream/265598?tick_type=MidPoint&limit=50"
+curl -N "http://localhost:8000/stream/265598/MidPoint?limit=50"
 ```
 
 ### Response Format
@@ -352,7 +349,7 @@ Client SSE Stream (isolated)
 ### JavaScript Client (Browser)
 
 ```javascript
-const eventSource = new EventSource('http://localhost:8000/stream/265598?tick_type=BidAsk&limit=100');
+const eventSource = new EventSource('http://localhost:8000/stream/265598/BidAsk?limit=100');
 
 eventSource.onmessage = function(event) {
     const data = JSON.parse(event.data);
@@ -377,8 +374,8 @@ eventSource.onerror = function(event) {
 import requests
 import json
 
-url = "http://localhost:8000/stream/265598"
-params = {"tick_type": "BidAsk", "limit": 100}
+url = "http://localhost:8000/stream/265598/BidAsk"
+params = {"limit": 100}
 
 with requests.get(url, params=params, stream=True) as response:
     for line in response.iter_lines():

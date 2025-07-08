@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from .config import create_config, get_default_tick_type, is_valid_tick_type
+from .config import create_config, is_valid_tick_type
 from .sse_response import (
     SSECompleteEvent,
     SSEErrorEvent,
@@ -129,9 +129,13 @@ async def root():
         "message": "IB Stream API Server",
         "version": "1.0.0",
         "description": "Real-time streaming market data via Server-Sent Events",
+        "documentation": {
+            "info": "Visit /stream/info for detailed API usage and examples",
+            "health": "Check /health for server and connection status",
+            "active": "View /stream/active for currently running streams",
+        },
         "endpoints": {
-            "/stream/{contract_id}": "Stream market data for a contract with query parameters",
-            "/stream/{contract_id}/{tick_type}": "Stream specific tick type data",
+            "/stream/{contract_id}/{tick_type}": "Stream specific tick type data for a contract",
             "/health": "Health check with TWS connection status",
             "/stream/info": "Available tick types and streaming capabilities",
             "/stream/active": "List currently active streams",
@@ -179,6 +183,11 @@ async def health_check():
 async def stream_info():
     """Information about available streaming capabilities"""
     return {
+        "usage": {
+            "endpoint": "/stream/{contract_id}/{tick_type}",
+            "description": "Stream market data for a contract with specific tick type",
+            "example": "/stream/12345/BidAsk?limit=100&timeout=60",
+        },
         "tick_types": {
             "Last": "Regular trades during market hours",
             "AllLast": "All trades including pre/post market",
@@ -186,9 +195,8 @@ async def stream_info():
             "MidPoint": "Calculated midpoint between bid and ask",
         },
         "query_parameters": {
-            "limit": "Number of ticks before auto-stop (integer, optional)",
-            "tick_type": "Data type to stream (enum: Last, AllLast, BidAsk, MidPoint)",
-            "timeout": "Stream timeout in seconds (integer, default: 300)",
+            "limit": "Number of ticks before auto-stop (integer, optional, max: 10000)",
+            "timeout": "Stream timeout in seconds (integer, optional, range: 5-3600)",
         },
         "sse_event_types": {
             "tick": "Market data tick",
@@ -419,44 +427,6 @@ async def stream_contract_with_type(
     return create_sse_response(events)
 
 
-@app.get("/stream/{contract_id}")
-async def stream_contract(
-    contract_id: int,
-    tick_type: str = Query(default=get_default_tick_type(), description="Type of tick data to stream"),
-    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
-    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
-):
-    """Stream market data for a contract via Server-Sent Events"""
-
-    # Validate tick type
-    if not is_valid_tick_type(tick_type):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(['Last', 'AllLast', 'BidAsk', 'MidPoint'])}"
-        )
-
-    # Validate limit
-    if limit is not None and (limit < 1 or limit > 10000):
-        raise HTTPException(
-            status_code=400,
-            detail="Limit must be between 1 and 10000"
-        )
-
-    # Validate timeout
-    if timeout is not None and (timeout < 5 or timeout > 3600):
-        raise HTTPException(
-            status_code=400,
-            detail="Timeout must be between 5 and 3600 seconds"
-        )
-
-    logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s",
-                contract_id, tick_type, limit, timeout)
-
-    # Create event generator
-    events = stream_contract_data(contract_id, tick_type, limit, timeout)
-
-    # Return SSE response
-    return create_sse_response(events)
 
 
 @app.delete("/stream/all")
