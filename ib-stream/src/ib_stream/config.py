@@ -137,6 +137,19 @@ def get_default_tick_type() -> str:
     return "Last"
 
 
+def convert_v2_tick_type_to_tws_api(v2_tick_type: str) -> str:
+    """Convert v2 protocol tick type (snake_case) to TWS API format (PascalCase)"""
+    conversion_map = {
+        "bid_ask": "BidAsk",
+        "last": "Last", 
+        "all_last": "AllLast",
+        "mid_point": "MidPoint"
+    }
+    
+    # Return converted value if found, otherwise return original (for backward compatibility)
+    return conversion_map.get(v2_tick_type, v2_tick_type)
+
+
 def get_max_limit() -> int:
     """Get maximum allowed limit for ticks"""
     return 10000  # Reasonable limit to prevent abuse

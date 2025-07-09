@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from ib_studies.models import StreamConfig
-from ib_studies.multi_stream_client import MultiStreamClient
+from ib_studies.stream_client import StreamClient
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +67,8 @@ class MultiStudyRunner:
             signal.signal(signal.SIGTERM, lambda s, f: signal_handler())
         
         try:
-            # Create and setup multi-stream client
-            self.stream_client = MultiStreamClient(self.stream_config)
+            # Create and setup stream client
+            self.stream_client = StreamClient(self.stream_config)
             
             # Use provided tick types or fall back to study's required types
             stream_tick_types = tick_types or self.study.required_tick_types
@@ -84,25 +84,30 @@ class MultiStudyRunner:
                 )
                 self.formatter.output(header)
             
-            # Connect to all streams
-            await self.stream_client.connect_multiple(
-                contract_id, 
-                stream_tick_types, 
-                self._handle_tick
+            # Connect to stream
+            await self.stream_client.connect(contract_id, stream_tick_types)
+            
+            # Start consumption with stop event monitoring
+            consume_task = asyncio.create_task(self.stream_client.consume(self._handle_tick))
+            stop_task = asyncio.create_task(self._stop_event.wait())
+            
+            # Wait for either consumption to complete or stop signal
+            done, pending = await asyncio.wait(
+                [consume_task, stop_task],
+                return_when=asyncio.FIRST_COMPLETED
             )
             
-            # Wait for completion or stop signal
-            try:
-                await self.stream_client.wait_for_completion()
-            except asyncio.CancelledError:
-                logger.info("Study runner cancelled")
-                raise
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
             self._stop_event.set()
-            if self.stream_client:
-                await self.stream_client.stop()
         except asyncio.CancelledError:
             logger.info("Study runner task cancelled")
         except Exception as e:
@@ -113,16 +118,17 @@ class MultiStudyRunner:
         finally:
             await self.cleanup()
     
-    async def _handle_tick(self, tick_type: str, data: dict) -> None:
-        """Handle incoming tick data from any stream."""
+    async def _handle_tick(self, tick_type: str, data: dict, stream_id: str = "", timestamp: str = "") -> None:
+        """Handle incoming v2 protocol tick data from any stream."""
         if self._stop_event.is_set():
             return
         
-        logger.debug("MultiStudyRunner._handle_tick: tick_type=%s, data=%s", tick_type, data)
+        logger.debug("MultiStudyRunner._handle_tick: tick_type=%s, stream_id=%s, timestamp=%s, data=%s", 
+                    tick_type, stream_id, timestamp, data)
         
         try:
-            # Process tick through study
-            result = self.study.process_tick(tick_type, data)
+            # Process tick through study with v2 protocol signature
+            result = self.study.process_tick(tick_type, data, stream_id, timestamp)
             logger.debug("Study result: %s", result)
             
             # Format and output result (only for trade results, not quote updates)
@@ -141,9 +147,8 @@ class MultiStudyRunner:
         logger.info("Force cleanup initiated")
         try:
             if self.stream_client:
-                # Set stop event and disconnect immediately
-                await self.stream_client.stop()
-                await asyncio.wait_for(self.stream_client.disconnect_all(), timeout=2.0)
+                # Disconnect immediately
+                await asyncio.wait_for(self.stream_client.disconnect(), timeout=2.0)
         except asyncio.TimeoutError:
             logger.warning("Force cleanup timed out, proceeding anyway")
         except Exception as e:
@@ -165,7 +170,7 @@ class MultiStudyRunner:
         
         # Disconnect stream client
         if self.stream_client:
-            await self.stream_client.disconnect_all()
+            await self.stream_client.disconnect()
         
         # Close formatter
         if hasattr(self.formatter, 'close'):

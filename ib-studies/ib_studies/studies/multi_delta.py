@@ -37,19 +37,20 @@ class MultiStreamDeltaStudy(BaseStudy):
         """Multi-stream delta study requires both bid/ask quotes and trade data."""
         return ["BidAsk", "Last"]
     
-    def process_tick(self, tick_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process incoming tick data from multiple streams."""
+    def process_tick(self, tick_type: str, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
+        """Process incoming v2 protocol tick data from multiple streams."""
         self.increment_tick_count()
-        logger.debug("MultiStreamDeltaStudy.process_tick: tick_type=%s, data=%s", tick_type, data)
+        logger.debug("MultiStreamDeltaStudy.process_tick: tick_type=%s, stream_id=%s, timestamp=%s, data=%s", 
+                    tick_type, stream_id, timestamp, data)
         
         try:
             if tick_type in ["BidAsk", "bid_ask"]:
                 logger.debug("Processing BidAsk tick from stream")
-                self._process_bid_ask(data)
+                self._process_bid_ask(data, stream_id, timestamp)
                 return None  # No output for quote updates
             elif tick_type in ["Last", "AllLast", "last", "all_last", "time_sales"]:
                 logger.debug("Processing trade tick: %s", tick_type)
-                result = self._process_trade(data, tick_type)
+                result = self._process_trade(data, tick_type, stream_id, timestamp)
                 logger.debug("Trade processing result: %s", result)
                 return result
             else:
@@ -59,8 +60,8 @@ class MultiStreamDeltaStudy(BaseStudy):
             logger.error("Error processing tick: %s", e, exc_info=True)
             return None
     
-    def _process_bid_ask(self, data: Dict[str, Any]) -> None:
-        """Update current market quote from BidAsk stream."""
+    def _process_bid_ask(self, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> None:
+        """Update current market quote from v2 BidAsk stream."""
         try:
             # Handle bid_ask data format from stream
             bid_price = float(data.get('bid_price', 0))
@@ -69,7 +70,7 @@ class MultiStreamDeltaStudy(BaseStudy):
             ask_size = float(data.get('ask_size', 0))
             
             self.current_quote = MarketQuote(
-                timestamp=self._parse_timestamp(data),
+                timestamp=self._parse_timestamp(data, timestamp),
                 bid_price=bid_price,
                 ask_price=ask_price,
                 bid_size=bid_size,
@@ -80,15 +81,15 @@ class MultiStreamDeltaStudy(BaseStudy):
             if self.current_quote.bid_price > 0 and self.current_quote.ask_price > 0:
                 self.last_known_quote = self.current_quote
             
-            logger.debug("Updated quote: bid=%.2f@%.0f, ask=%.2f@%.0f, spread=%.2f", 
-                        self.current_quote.bid_price, self.current_quote.bid_size,
+            logger.debug("Updated v2 quote (stream_id=%s): bid=%.2f@%.0f, ask=%.2f@%.0f, spread=%.2f", 
+                        stream_id, self.current_quote.bid_price, self.current_quote.bid_size,
                         self.current_quote.ask_price, self.current_quote.ask_size,
                         self.current_quote.spread)
         except (KeyError, ValueError) as e:
             logger.error("Invalid bid/ask data: %s", e)
     
-    def _process_trade(self, data: Dict[str, Any], tick_type: str) -> Optional[Dict[str, Any]]:
-        """Process trade and calculate true delta using current bid/ask."""
+    def _process_trade(self, data: Dict[str, Any], tick_type: str, stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
+        """Process trade and calculate true delta using current bid/ask from v2 protocol."""
         try:
             # Handle conditions - convert string to list if needed
             conditions = data.get('conditions', [])
@@ -96,7 +97,7 @@ class MultiStreamDeltaStudy(BaseStudy):
                 conditions = [conditions] if conditions else []
             
             trade = Trade(
-                timestamp=self._parse_timestamp(data),
+                timestamp=self._parse_timestamp(data, timestamp),
                 price=float(data.get('price', 0)),
                 size=float(data.get('size', 0)),
                 exchange=data.get('exchange', ''),
@@ -144,7 +145,7 @@ class MultiStreamDeltaStudy(BaseStudy):
             )
             
             # Return current state
-            return self._create_output(delta_point)
+            return self._create_output(delta_point, stream_id, timestamp)
             
         except (KeyError, ValueError) as e:
             logger.error("Invalid trade data: %s", e)
@@ -243,13 +244,14 @@ class MultiStreamDeltaStudy(BaseStudy):
             logger.debug("Same price: %.2f = %.2f, delta=0", trade.price, self.last_trade_price)
             return 0
     
-    def _create_output(self, delta_point: DeltaPoint) -> Dict[str, Any]:
-        """Create output dictionary for current state."""
+    def _create_output(self, delta_point: DeltaPoint, stream_id: str = "", timestamp: str = "") -> Dict[str, Any]:
+        """Create v2 protocol output dictionary for current state."""
         summary = self.get_summary()
         
         return {
             "study": "multi_delta",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "stream_id": stream_id,
             "tick_type": "trade",
             "current_trade": {
                 "price": delta_point.trade.price,
@@ -321,9 +323,17 @@ class MultiStreamDeltaStudy(BaseStudy):
         self._start_time = datetime.now()
         logger.info("Multi-stream delta study reset")
     
-    def _parse_timestamp(self, data: Dict[str, Any]) -> datetime:
-        """Parse timestamp from tick data."""
-        # Try different timestamp formats
+    def _parse_timestamp(self, data: Dict[str, Any], v2_timestamp: str = "") -> datetime:
+        """Parse timestamp from v2 protocol tick data."""
+        # Try v2 protocol timestamp first
+        if v2_timestamp:
+            try:
+                # ISO format with Z suffix
+                return datetime.fromisoformat(v2_timestamp.replace('Z', '+00:00'))
+            except ValueError:
+                pass
+        
+        # Fall back to data timestamp
         timestamp_str = data.get('timestamp', '')
         if timestamp_str:
             try:

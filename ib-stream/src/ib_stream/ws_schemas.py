@@ -1,6 +1,4 @@
-"""
-WebSocket message schemas and validation for IB Stream API.
-"""
+"""WebSocket message schemas and validation for IB-Stream v2 protocol."""
 
 import json
 import logging
@@ -10,58 +8,47 @@ from datetime import datetime
 import jsonschema
 from jsonschema import validate, ValidationError
 
+from .protocol_types import (
+    SubscribeMessage,
+    UnsubscribeMessage,
+    SubscribedMessage,
+    ConnectedMessage,
+    PingMessage,
+    PongMessage,
+    TickMessage,
+    ErrorMessage,
+    CompleteMessage,
+    InfoMessage
+)
+
 logger = logging.getLogger(__name__)
 
-# Client-to-Server Message Schemas
+# Client-to-Server Message Schemas (v2 protocol)
 
 SUBSCRIBE_SCHEMA = {
     "type": "object",
     "properties": {
         "type": {"const": "subscribe"},
         "id": {"type": "string", "minLength": 1},
-        "data": {
-            "type": "object",
-            "properties": {
-                "contract_id": {"type": "integer", "minimum": 1},
-                "tick_type": {"enum": ["Last", "AllLast", "BidAsk", "MidPoint"]},
-                "params": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 10000},
-                        "timeout": {"type": "integer", "minimum": 5, "maximum": 3600}
-                    },
-                    "additionalProperties": False
-                }
-            },
-            "required": ["contract_id", "tick_type"],
-            "additionalProperties": False
-        }
-    },
-    "required": ["type", "id", "data"],
-    "additionalProperties": False
-}
-
-MULTI_SUBSCRIBE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "type": {"const": "multi_subscribe"},
-        "id": {"type": "string", "minLength": 1},
+        "timestamp": {"type": "string", "format": "date-time"},
         "data": {
             "type": "object",
             "properties": {
                 "contract_id": {"type": "integer", "minimum": 1},
                 "tick_types": {
                     "type": "array",
-                    "items": {"enum": ["Last", "AllLast", "BidAsk", "MidPoint"]},
+                    "items": {"enum": ["last", "all_last", "bid_ask", "mid_point"]},
                     "minItems": 1,
                     "maxItems": 4,
                     "uniqueItems": True
                 },
-                "params": {
+                "config": {
                     "type": "object",
                     "properties": {
                         "limit": {"type": "integer", "minimum": 1, "maximum": 10000},
-                        "timeout": {"type": "integer", "minimum": 5, "maximum": 3600}
+                        "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 3600},
+                        "buffer_size": {"type": "integer", "minimum": 1, "maximum": 10000},
+                        "include_extended": {"type": "boolean"}
                     },
                     "additionalProperties": False
                 }
@@ -70,7 +57,7 @@ MULTI_SUBSCRIBE_SCHEMA = {
             "additionalProperties": False
         }
     },
-    "required": ["type", "id", "data"],
+    "required": ["type", "id", "timestamp", "data"],
     "additionalProperties": False
 }
 
@@ -79,26 +66,17 @@ UNSUBSCRIBE_SCHEMA = {
     "properties": {
         "type": {"const": "unsubscribe"},
         "id": {"type": "string", "minLength": 1},
+        "timestamp": {"type": "string", "format": "date-time"},
         "data": {
             "type": "object",
             "properties": {
-                "request_id": {"type": "string", "minLength": 1}
+                "stream_id": {"type": "string", "minLength": 1}
             },
-            "required": ["request_id"],
+            "required": ["stream_id"],
             "additionalProperties": False
         }
     },
-    "required": ["type", "id", "data"],
-    "additionalProperties": False
-}
-
-UNSUBSCRIBE_ALL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "type": {"const": "unsubscribe_all"},
-        "id": {"type": "string", "minLength": 1}
-    },
-    "required": ["type", "id"],
+    "required": ["type", "id", "timestamp", "data"],
     "additionalProperties": False
 }
 
@@ -109,144 +87,16 @@ PING_SCHEMA = {
         "id": {"type": "string", "minLength": 1},
         "timestamp": {"type": "string", "format": "date-time"}
     },
-    "required": ["type", "id"],
+    "required": ["type", "id", "timestamp"],
     "additionalProperties": False
 }
 
 # Schema registry for message types
 CLIENT_MESSAGE_SCHEMAS = {
     "subscribe": SUBSCRIBE_SCHEMA,
-    "multi_subscribe": MULTI_SUBSCRIBE_SCHEMA,
     "unsubscribe": UNSUBSCRIBE_SCHEMA,
-    "unsubscribe_all": UNSUBSCRIBE_ALL_SCHEMA,
     "ping": PING_SCHEMA
 }
-
-
-class WebSocketMessage:
-    """Base class for WebSocket messages."""
-    
-    def __init__(self, message_type: str, message_id: Optional[str] = None, 
-                 data: Optional[Dict[str, Any]] = None):
-        self.type = message_type
-        self.id = message_id
-        self.data = data or {}
-        self.timestamp = datetime.now().isoformat()
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert message to dictionary."""
-        message = {
-            "type": self.type,
-            "timestamp": self.timestamp
-        }
-        
-        if self.id:
-            message["id"] = self.id
-            
-        if self.data:
-            message.update(self.data)
-            
-        return message
-    
-    def to_json(self) -> str:
-        """Convert message to JSON string."""
-        return json.dumps(self.to_dict(), ensure_ascii=False)
-
-
-class SubscribedMessage(WebSocketMessage):
-    """Server message confirming subscription."""
-    
-    def __init__(self, message_id: str, request_id: str, contract_id: int, 
-                 tick_type: str, contract_info: Optional[Dict[str, Any]] = None):
-        data = {
-            "data": {
-                "request_id": request_id,
-                "contract_id": contract_id,
-                "tick_type": tick_type,
-                "contract_info": contract_info or {}
-            }
-        }
-        super().__init__("subscribed", message_id, data)
-
-
-class TickMessage(WebSocketMessage):
-    """Server message containing tick data."""
-    
-    def __init__(self, request_id: str, tick_data: Dict[str, Any]):
-        data = {
-            "request_id": request_id,
-            "data": tick_data
-        }
-        super().__init__("tick", data=data)
-
-
-class ErrorMessage(WebSocketMessage):
-    """Server message containing error information."""
-    
-    def __init__(self, request_id: Optional[str], error_code: str, 
-                 message: str, details: Optional[Dict[str, Any]] = None):
-        data = {
-            "error": {
-                "code": error_code,
-                "message": message,
-                "details": details or {}
-            }
-        }
-        if request_id:
-            data["request_id"] = request_id
-        super().__init__("error", data=data)
-
-
-class CompleteMessage(WebSocketMessage):
-    """Server message indicating stream completion."""
-    
-    def __init__(self, request_id: str, reason: str, total_ticks: int, 
-                 duration_seconds: float):
-        data = {
-            "request_id": request_id,
-            "data": {
-                "reason": reason,
-                "total_ticks": total_ticks,
-                "duration_seconds": duration_seconds
-            }
-        }
-        super().__init__("complete", data=data)
-
-
-class UnsubscribedMessage(WebSocketMessage):
-    """Server message confirming unsubscription."""
-    
-    def __init__(self, message_id: str, request_id: str):
-        data = {
-            "data": {
-                "request_id": request_id
-            }
-        }
-        super().__init__("unsubscribed", message_id, data)
-
-
-class PongMessage(WebSocketMessage):
-    """Server message responding to ping."""
-    
-    def __init__(self, message_id: str, client_timestamp: Optional[str] = None):
-        data = {
-            "data": {
-                "client_timestamp": client_timestamp,
-                "server_timestamp": datetime.now().isoformat()
-            }
-        }
-        super().__init__("pong", message_id, data)
-
-
-class ConnectedMessage(WebSocketMessage):
-    """Server message sent on connection establishment."""
-    
-    def __init__(self, version: str = "1.0.0", server_info: Optional[Dict[str, Any]] = None):
-        data = {
-            "version": version,
-            "server_info": server_info or {}
-        }
-        super().__init__("connected", data=data)
 
 
 def validate_client_message(message_data: Dict[str, Any]) -> bool:
@@ -304,7 +154,57 @@ def parse_client_message(raw_message: str) -> Dict[str, Any]:
     return message_data
 
 
-# WebSocket close codes
+def create_subscribe_message(message_id: str, contract_id: int, tick_types: List[str], config: Optional[Dict[str, Any]] = None) -> SubscribeMessage:
+    """Create a subscribe message with v2 protocol structure."""
+    return SubscribeMessage(message_id, contract_id, tick_types, config)
+
+
+def create_unsubscribe_message(message_id: str, stream_id: str) -> UnsubscribeMessage:
+    """Create an unsubscribe message with v2 protocol structure."""
+    return UnsubscribeMessage(message_id, stream_id)
+
+
+def create_subscribed_message(message_id: str, streams: List[Dict[str, str]]) -> SubscribedMessage:
+    """Create a subscribed confirmation message with v2 protocol structure."""
+    return SubscribedMessage(message_id, streams)
+
+
+def create_connected_message(version: str = "2.0.0") -> ConnectedMessage:
+    """Create a connected handshake message with v2 protocol structure."""
+    return ConnectedMessage(version)
+
+
+def create_ping_message(message_id: str) -> PingMessage:
+    """Create a ping message with v2 protocol structure."""
+    return PingMessage(message_id)
+
+
+def create_pong_message(message_id: str, client_timestamp: Optional[str] = None) -> PongMessage:
+    """Create a pong response message with v2 protocol structure."""
+    return PongMessage(message_id, client_timestamp)
+
+
+def create_tick_message(stream_id: str, contract_id: int, tick_type: str, tick_data: Dict[str, Any]) -> TickMessage:
+    """Create a tick message with v2 protocol structure."""
+    return TickMessage(stream_id, contract_id, tick_type, tick_data)
+
+
+def create_error_message(stream_id: str, code: str, message: str, details: Optional[Dict[str, Any]] = None, recoverable: bool = True) -> ErrorMessage:
+    """Create an error message with v2 protocol structure."""
+    return ErrorMessage(stream_id, code, message, details, recoverable)
+
+
+def create_complete_message(stream_id: str, reason: str, total_ticks: int, duration_seconds: float, final_sequence: Optional[int] = None) -> CompleteMessage:
+    """Create a completion message with v2 protocol structure."""
+    return CompleteMessage(stream_id, reason, total_ticks, duration_seconds, final_sequence)
+
+
+def create_info_message(stream_id: str, status: str, contract_info: Optional[Dict[str, Any]] = None, stream_config: Optional[Dict[str, Any]] = None) -> InfoMessage:
+    """Create an info message with v2 protocol structure."""
+    return InfoMessage(stream_id, status, contract_info, stream_config)
+
+
+# WebSocket close codes (same as v1)
 class WSCloseCode:
     """WebSocket close codes."""
     NORMAL_CLOSURE = 1000
@@ -321,7 +221,7 @@ class WSCloseCode:
     RATE_LIMIT_EXCEEDED = 4004
 
 
-# Error code mappings
+# Error code mappings for close codes
 ERROR_CODE_TO_CLOSE_CODE = {
     "INVALID_MESSAGE": WSCloseCode.INVALID_MESSAGE,
     "AUTH_REQUIRED": WSCloseCode.AUTH_REQUIRED,
@@ -335,3 +235,69 @@ ERROR_CODE_TO_CLOSE_CODE = {
 def get_close_code_for_error(error_code: str) -> int:
     """Get appropriate WebSocket close code for an error."""
     return ERROR_CODE_TO_CLOSE_CODE.get(error_code, WSCloseCode.INTERNAL_ERROR)
+
+
+# Helper functions for common error messages
+
+def create_invalid_message_error(stream_id: str, validation_error: str) -> ErrorMessage:
+    """Create an invalid message error."""
+    return create_error_message(
+        stream_id,
+        "INVALID_MESSAGE",
+        "Invalid message format",
+        {"validation_error": validation_error},
+        recoverable=False
+    )
+
+
+def create_contract_not_found_error(stream_id: str, contract_id: int) -> ErrorMessage:
+    """Create a contract not found error."""
+    return create_error_message(
+        stream_id,
+        "CONTRACT_NOT_FOUND",
+        f"Contract ID {contract_id} not found",
+        {
+            "contract_id": contract_id,
+            "suggestion": "Verify contract ID using the contract lookup API"
+        },
+        recoverable=False
+    )
+
+
+def create_rate_limit_error(stream_id: str) -> ErrorMessage:
+    """Create a rate limit exceeded error."""
+    return create_error_message(
+        stream_id,
+        "RATE_LIMIT_EXCEEDED",
+        "Too many concurrent streams",
+        {"suggestion": "Try again later or reduce concurrent connections"},
+        recoverable=True
+    )
+
+
+def create_connection_error(stream_id: str, details: str) -> ErrorMessage:
+    """Create a TWS connection error."""
+    return create_error_message(
+        stream_id,
+        "CONNECTION_ERROR",
+        "Unable to connect to TWS/Gateway",
+        {
+            "connection_details": details,
+            "suggestion": "Ensure TWS/Gateway is running with API enabled"
+        },
+        recoverable=True
+    )
+
+
+def create_internal_error(stream_id: str, error_details: str) -> ErrorMessage:
+    """Create an internal server error."""
+    return create_error_message(
+        stream_id,
+        "INTERNAL_ERROR",
+        "Internal server error occurred",
+        {
+            "error_details": error_details,
+            "suggestion": "Please retry or contact support if problem persists"
+        },
+        recoverable=True
+    )

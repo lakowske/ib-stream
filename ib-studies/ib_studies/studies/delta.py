@@ -31,19 +31,20 @@ class DeltaStudy(BaseStudy):
         """Delta study requires bid/ask quotes and trade data."""
         return ["BidAsk", "Last", "AllLast"]
     
-    def process_tick(self, tick_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process incoming tick data."""
+    def process_tick(self, tick_type: str, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
+        """Process incoming v2 protocol tick data."""
         self.increment_tick_count()
-        logger.debug("DeltaStudy.process_tick: tick_type=%s, data=%s", tick_type, data)
+        logger.debug("DeltaStudy.process_tick: tick_type=%s, stream_id=%s, timestamp=%s, data=%s", 
+                    tick_type, stream_id, timestamp, data)
         
         try:
             if tick_type in ["BidAsk", "bid_ask"]:
                 logger.debug("Processing BidAsk tick")
-                self._process_bid_ask(data)
+                self._process_bid_ask(data, stream_id, timestamp)
                 return None  # No output for quote updates
             elif tick_type in ["Last", "AllLast", "last", "all_last", "time_sales"]:
                 logger.debug("Processing trade tick: %s", tick_type)
-                result = self._process_trade(data, tick_type)
+                result = self._process_trade(data, tick_type, stream_id, timestamp)
                 logger.debug("Trade processing result: %s", result)
                 return result
             else:
@@ -53,11 +54,11 @@ class DeltaStudy(BaseStudy):
             logger.error("Error processing tick: %s", e, exc_info=True)
             return None
     
-    def _process_bid_ask(self, data: Dict[str, Any]) -> None:
-        """Update current market quote."""
+    def _process_bid_ask(self, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> None:
+        """Update current market quote from v2 protocol."""
         try:
             self.current_quote = MarketQuote(
-                timestamp=self._parse_timestamp(data),
+                timestamp=self._parse_timestamp(data, timestamp),
                 bid_price=float(data.get('bid_price', 0)),
                 ask_price=float(data.get('ask_price', 0)),
                 bid_size=float(data.get('bid_size', 0)),
@@ -66,14 +67,14 @@ class DeltaStudy(BaseStudy):
             # Store as last known quote if it has valid prices
             if self.current_quote.bid_price > 0 and self.current_quote.ask_price > 0:
                 self.last_known_quote = self.current_quote
-            logger.debug("Updated quote: bid=%.2f, ask=%.2f", 
-                        self.current_quote.bid_price, 
+            logger.debug("Updated v2 quote (stream_id=%s): bid=%.2f, ask=%.2f", 
+                        stream_id, self.current_quote.bid_price, 
                         self.current_quote.ask_price)
         except (KeyError, ValueError) as e:
             logger.error("Invalid bid/ask data: %s", e)
     
-    def _process_trade(self, data: Dict[str, Any], tick_type: str) -> Optional[Dict[str, Any]]:
-        """Process trade and calculate delta."""
+    def _process_trade(self, data: Dict[str, Any], tick_type: str, stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
+        """Process trade and calculate delta from v2 protocol."""
         # For futures without bid/ask data, we can still calculate delta
         # using price direction (uptick/downtick rule)
         
@@ -84,7 +85,7 @@ class DeltaStudy(BaseStudy):
                 conditions = [conditions] if conditions else []
             
             trade = Trade(
-                timestamp=self._parse_timestamp(data),
+                timestamp=self._parse_timestamp(data, timestamp),
                 price=float(data.get('price', 0)),
                 size=float(data.get('size', 0)),
                 exchange=data.get('exchange', ''),
@@ -138,7 +139,7 @@ class DeltaStudy(BaseStudy):
             )
             
             # Return current state
-            return self._create_output(delta_point)
+            return self._create_output(delta_point, stream_id, timestamp)
             
         except (KeyError, ValueError) as e:
             logger.error("Invalid trade data: %s", e)
@@ -222,13 +223,14 @@ class DeltaStudy(BaseStudy):
             logger.debug("Same price: %.2f = %.2f, delta=0", trade.price, self.last_price)
             return 0
     
-    def _create_output(self, delta_point: DeltaPoint) -> Dict[str, Any]:
-        """Create output dictionary for current state."""
+    def _create_output(self, delta_point: DeltaPoint, stream_id: str = "", timestamp: str = "") -> Dict[str, Any]:
+        """Create v2 protocol output dictionary for current state."""
         summary = self.get_summary()
         
         return {
             "study": "delta",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "stream_id": stream_id,
             "tick_type": "trade",
             "current_trade": {
                 "price": delta_point.trade.price,
@@ -284,9 +286,17 @@ class DeltaStudy(BaseStudy):
         self._start_time = datetime.now()
         logger.info("Delta study reset")
     
-    def _parse_timestamp(self, data: Dict[str, Any]) -> datetime:
-        """Parse timestamp from tick data."""
-        # Try different timestamp formats
+    def _parse_timestamp(self, data: Dict[str, Any], v2_timestamp: str = "") -> datetime:
+        """Parse timestamp from v2 protocol tick data."""
+        # Try v2 protocol timestamp first
+        if v2_timestamp:
+            try:
+                # ISO format with Z suffix
+                return datetime.fromisoformat(v2_timestamp.replace('Z', '+00:00'))
+            except ValueError:
+                pass
+        
+        # Fall back to data timestamp
         timestamp_str = data.get('timestamp', '')
         if timestamp_str:
             try:

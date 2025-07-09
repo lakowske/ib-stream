@@ -17,13 +17,15 @@ class BaseStudy(ABC):
         self._tick_count = 0
         
     @abstractmethod
-    def process_tick(self, tick_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def process_tick(self, tick_type: str, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
         """
-        Process incoming tick data.
+        Process incoming v2 protocol tick data.
         
         Args:
             tick_type: Type of tick (BidAsk, Last, AllLast, etc.)
             data: Tick data dictionary
+            stream_id: V2 protocol stream identifier (optional for backward compatibility)
+            timestamp: V2 protocol timestamp (optional for backward compatibility)
             
         Returns:
             Optional dictionary with study results or None
@@ -85,7 +87,8 @@ class BaseStudy(ABC):
         if not data_points:
             return data_points
             
-        cutoff_time = datetime.now() - timedelta(seconds=window_seconds)
+        from datetime import timezone
+        cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
         return [
             point for point in data_points 
             if hasattr(point, 'timestamp') and point.timestamp > cutoff_time

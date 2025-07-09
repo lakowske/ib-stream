@@ -1,4 +1,4 @@
-"""SSE client for consuming IB-Stream data."""
+"""SSE client for consuming IB-Stream v2 protocol data."""
 
 import asyncio
 import json
@@ -9,12 +9,13 @@ from urllib.parse import urljoin, urlencode
 import httpx
 
 from ib_studies.models import StreamConfig
+from ib_studies.v2_utils import normalize_tick_type
 
 logger = logging.getLogger(__name__)
 
 
 class StreamClient:
-    """SSE client for consuming IB-Stream data."""
+    """SSE client for consuming IB-Stream v2 protocol data."""
     
     def __init__(self, config: Optional[StreamConfig] = None):
         """Initialize stream client."""
@@ -26,21 +27,34 @@ class StreamClient:
         self._stream_url: Optional[str] = None
         
     async def connect(self, contract_id: int, tick_types: List[str]) -> None:
-        """Connect to stream endpoint."""
+        """Connect to v2 stream endpoint."""
         if self.is_connected:
             logger.warning("Already connected to stream")
             return
         
-        # Build URL with query parameters
-        params = {
-            "tick_types": ",".join(tick_types),
-            "timeout": self.config.timeout
-        }
+        # Build v2 URL - single tick type or multi-stream
+        if len(tick_types) == 1:
+            # Single stream endpoint
+            tick_type = normalize_tick_type(tick_types[0])
+            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}/{tick_type}")
+            params = {}
+        else:
+            # Multi-stream endpoint
+            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}")
+            params = {
+                "tick_types": ",".join([normalize_tick_type(t) for t in tick_types])
+            }
         
-        url = urljoin(self.config.base_url, f"/stream/{contract_id}")
-        self._stream_url = f"{url}?{urlencode(params)}"
+        # Add common parameters
+        if self.config.timeout:
+            params["timeout"] = self.config.timeout
         
-        logger.info("Connecting to stream: %s", self._stream_url)
+        if params:
+            self._stream_url = f"{url}?{urlencode(params)}"
+        else:
+            self._stream_url = url
+        
+        logger.info("Connecting to v2 stream: %s", self._stream_url)
         
         # Create HTTP client
         self.client = httpx.AsyncClient(
@@ -56,12 +70,17 @@ class StreamClient:
         self.reconnect_attempts = 0
         logger.info("Connected to stream for contract %d", contract_id)
     
-    async def consume(self, callback: Callable[[str, Dict], None]) -> None:
+    async def stop(self) -> None:
+        """Stop the stream client."""
+        logger.info("Stopping stream client")
+        self._stop_event.set()
+    
+    async def consume(self, callback: Callable[[str, Dict, str, str], None]) -> None:
         """
-        Consume events with callback.
+        Consume v2 protocol events with callback.
         
         Args:
-            callback: Function to call for each event (tick_type, data)
+            callback: Function to call for each event (tick_type, data, stream_id, timestamp)
         """
         if not self.is_connected or not self.client:
             raise RuntimeError("Not connected to stream")
@@ -78,7 +97,7 @@ class StreamClient:
                     logger.error("Max reconnection attempts reached")
                     break
     
-    async def _consume_events(self, callback: Callable[[str, Dict], None]) -> None:
+    async def _consume_events(self, callback: Callable[[str, Dict, str, str], None]) -> None:
         """Internal method to consume SSE events."""
         if not self._stream_url:
             raise RuntimeError("Stream URL not set - call connect() first")
@@ -122,78 +141,106 @@ class StreamClient:
                     logger.debug("Empty line - event boundary")
                 # Ignore other SSE fields like "retry:"
     
-    async def _process_sse_data(self, data: str, callback: Callable[[str, Dict], None]) -> None:
-        """Process a complete SSE data block."""
+    async def _process_sse_data(self, data: str, callback: Callable[[str, Dict, str, str], None]) -> None:
+        """Process a complete v2 protocol SSE data block."""
         try:
-            logger.debug("Processing SSE data: %r", data)
+            logger.debug("Processing v2 SSE data: %r", data)
             
-            # Parse JSON data
-            parsed_data = json.loads(data)
-            logger.debug("Parsed JSON data: %s", parsed_data)
+            # Parse JSON data - v2 protocol uses full message structure
+            message = json.loads(data)
+            logger.debug("Parsed v2 message: %s", message)
             
-            # Determine event type
-            event_type = parsed_data.get("type", "message")
-            logger.debug("Event type from data: %s", event_type)
+            # Extract v2 protocol fields
+            message_type = message.get("type", "unknown")
+            stream_id = message.get("stream_id", "")
+            timestamp = message.get("timestamp", "")
             
-            # Handle different event types
-            if event_type == "tick":
-                await self._handle_tick_event(parsed_data, callback)
-            elif event_type == "error":
-                await self._handle_error_event(parsed_data)
-            elif event_type == "complete":
-                await self._handle_complete_event(parsed_data)
-            elif event_type == "heartbeat":
-                await self._handle_heartbeat_event(parsed_data)
+            logger.debug("v2 message: type=%s, stream_id=%s, timestamp=%s", 
+                        message_type, stream_id, timestamp)
+            
+            # Handle different v2 message types
+            if message_type == "tick":
+                await self._handle_v2_tick_event(message, callback)
+            elif message_type == "error":
+                await self._handle_v2_error_event(message)
+            elif message_type == "complete":
+                await self._handle_v2_complete_event(message)
+            elif message_type == "info":
+                await self._handle_v2_info_event(message)
             else:
-                logger.debug("Unknown event type: %s", event_type)
-                # Try to handle as tick data anyway
-                await self._handle_tick_event(parsed_data, callback)
+                logger.warning("Unknown v2 message type: %s", message_type)
                         
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse SSE data as JSON: %s", e)
+            logger.error("Failed to parse v2 SSE data as JSON: %s", e)
             logger.error("Raw data was: %r", data)
         except Exception as e:
-            logger.error("Error processing SSE data: %s", e, exc_info=True)
+            logger.error("Error processing v2 SSE data: %s", e, exc_info=True)
     
-    async def _handle_tick_event(self, data: Dict, callback: Callable[[str, Dict], None]) -> None:
-        """Handle tick event."""
-        tick_data = data.get("data", {})
-        tick_type = tick_data.get("type", "unknown")
+    async def _handle_v2_tick_event(self, message: Dict, callback: Callable[[str, Dict, str, str], None]) -> None:
+        """Handle v2 protocol tick event."""
+        stream_id = message.get("stream_id", "")
+        timestamp = message.get("timestamp", "")
+        tick_data = message.get("data", {})
+        tick_type = tick_data.get("tick_type", "unknown")
         
-        logger.debug("Processing tick event: tick_type=%s, tick_data=%s", tick_type, tick_data)
+        logger.debug("Processing v2 tick event: stream_id=%s, tick_type=%s", stream_id, tick_type)
         
-        # Map tick types to expected format
+        # Convert snake_case to expected format for backward compatibility
         tick_type_map = {
             "bid_ask": "BidAsk",
-            "time_sales": "Last",  # This is the actual type from ib-stream
-            "all_last": "AllLast",
-            "midpoint": "MidPoint"
+            "last": "Last",
+            "all_last": "AllLast", 
+            "mid_point": "MidPoint"
         }
         
         mapped_type = tick_type_map.get(tick_type, tick_type)
-        logger.debug("Mapped tick type: %s -> %s", tick_type, mapped_type)
+        logger.debug("Mapped v2 tick type: %s -> %s", tick_type, mapped_type)
         
         try:
-            await callback(mapped_type, tick_data)
-            logger.debug("Callback executed successfully for tick type: %s", mapped_type)
+            await callback(mapped_type, tick_data, stream_id, timestamp)
+            logger.debug("v2 callback executed successfully for tick type: %s", mapped_type)
         except Exception as e:
-            logger.error("Error in tick callback: %s", e, exc_info=True)
+            logger.error("Error in v2 tick callback: %s", e, exc_info=True)
     
-    async def _handle_error_event(self, data: Dict) -> None:
-        """Handle error event."""
-        error_code = data.get("error_code", "unknown")
-        message = data.get("message", "Unknown error")
-        logger.error("Stream error: %s - %s", error_code, message)
+    async def _handle_v2_error_event(self, message: Dict) -> None:
+        """Handle v2 protocol error event."""
+        stream_id = message.get("stream_id", "")
+        error_data = message.get("data", {})
+        error_code = error_data.get("code", "unknown")
+        error_message = error_data.get("message", "Unknown error")
+        recoverable = error_data.get("recoverable", False)
+        
+        logger.error("v2 Stream error (stream_id=%s): %s - %s (recoverable=%s)", 
+                    stream_id, error_code, error_message, recoverable)
+        
+        # If this is a timeout error, stop the client instead of reconnecting
+        if error_code == "STREAM_TIMEOUT":
+            logger.info("Received timeout error - stopping client")
+            self._stop_event.set()
     
-    async def _handle_complete_event(self, data: Dict) -> None:
-        """Handle stream complete event."""
-        reason = data.get("reason", "unknown")
-        total_ticks = data.get("total_ticks", 0)
-        logger.info("Stream completed: %s (total ticks: %d)", reason, total_ticks)
+    async def _handle_v2_complete_event(self, message: Dict) -> None:
+        """Handle v2 protocol stream complete event."""
+        stream_id = message.get("stream_id", "")
+        complete_data = message.get("data", {})
+        reason = complete_data.get("reason", "unknown")
+        total_ticks = complete_data.get("total_ticks", 0)
+        duration = complete_data.get("duration_seconds", 0)
+        
+        logger.info("v2 Stream completed (stream_id=%s): %s (total ticks: %d, duration: %.2fs)", 
+                   stream_id, reason, total_ticks, duration)
+        
+        # If stream completed due to timeout, stop the client
+        if reason == "timeout":
+            logger.info("Stream completed due to timeout - stopping client")
+            self._stop_event.set()
     
-    async def _handle_heartbeat_event(self, data: Dict) -> None:
-        """Handle heartbeat event."""
-        logger.debug("Heartbeat received")
+    async def _handle_v2_info_event(self, message: Dict) -> None:
+        """Handle v2 protocol info event."""
+        stream_id = message.get("stream_id", "")
+        info_data = message.get("data", {})
+        status = info_data.get("status", "unknown")
+        
+        logger.info("v2 Stream info (stream_id=%s): %s", stream_id, status)
     
     async def _handle_reconnect(self) -> None:
         """Handle reconnection logic."""
@@ -247,17 +294,17 @@ class StreamClient:
             return {"status": "unhealthy", "error": str(e)}
     
     async def get_stream_info(self) -> Dict:
-        """Get stream server information."""
+        """Get v2 stream server information."""
         if not self.client:
             self.client = httpx.AsyncClient(timeout=10.0)
         
         try:
-            url = urljoin(self.config.base_url, "/stream/info")
+            url = urljoin(self.config.base_url, "/v2/info")
             response = await self.client.get(url)
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            logger.error("Stream info request failed: %s", e)
+            logger.error("v2 Stream info request failed: %s", e)
             return {"error": str(e)}
     
     def __enter__(self):

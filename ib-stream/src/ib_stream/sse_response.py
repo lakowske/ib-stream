@@ -1,105 +1,76 @@
-"""
-Server-Sent Events (SSE) response handler for streaming market data.
-"""
+"""Server-Sent Events (SSE) response handler for IB-Stream v2 protocol."""
 
 import json
 import logging
-from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from fastapi.responses import StreamingResponse
+
+from .protocol_types import (
+    V2Message,
+    TickMessage,
+    ErrorMessage,
+    CompleteMessage,
+    InfoMessage
+)
 
 logger = logging.getLogger(__name__)
 
 
 class SSEEvent:
-    """Represents a Server-Sent Event"""
+    """Represents a Server-Sent Event in v2 protocol format."""
 
-    def __init__(self, event_type: str, data: Dict[str, Any], event_id: Optional[str] = None):
-        self.event_type = event_type
-        self.data = data
+    def __init__(self, message: V2Message, event_id: Optional[str] = None):
+        self.message = message
         self.event_id = event_id
-        self.timestamp = datetime.now().isoformat()
 
     def format(self) -> str:
-        """Format event as SSE string"""
+        """Format event as SSE string following v2 protocol."""
         lines = []
 
         if self.event_id:
             lines.append(f"id: {self.event_id}")
 
-        lines.append(f"event: {self.event_type}")
+        # Event field matches message type
+        lines.append(f"event: {self.message.type}")
 
-        # Add timestamp to data
-        event_data = {
-            "type": self.event_type,
-            "timestamp": self.timestamp,
-            **self.data
-        }
-
-        data_json = json.dumps(event_data, ensure_ascii=False)
+        # Data contains the full v2 message
+        data_json = self.message.to_json()
         lines.append(f"data: {data_json}")
 
         lines.append("")  # Empty line to end the event
         return "\n".join(lines)
 
 
-class SSETickEvent(SSEEvent):
-    """SSE event for market data ticks"""
-
-    def __init__(self, contract_id: int, tick_data: Dict[str, Any], event_id: Optional[str] = None):
-        data = {
-            "contract_id": contract_id,
-            "data": tick_data
-        }
-        super().__init__("tick", data, event_id)
+def create_tick_event(stream_id: str, contract_id: int, tick_type: str, tick_data: Dict[str, Any]) -> SSEEvent:
+    """Create SSE tick event with v2 protocol structure."""
+    message = TickMessage(stream_id, contract_id, tick_type, tick_data)
+    return SSEEvent(message)
 
 
-class SSEErrorEvent(SSEEvent):
-    """SSE event for errors"""
-
-    def __init__(self, contract_id: int, error_code: str, message: str,
-                 details: Optional[str] = None, event_id: Optional[str] = None):
-        data = {
-            "contract_id": contract_id,
-            "error": {
-                "code": error_code,
-                "message": message,
-                "details": details
-            }
-        }
-        super().__init__("error", data, event_id)
+def create_error_event(stream_id: str, code: str, message: str, details: Optional[Dict[str, Any]] = None, recoverable: bool = True) -> SSEEvent:
+    """Create SSE error event with v2 protocol structure."""
+    error_msg = ErrorMessage(stream_id, code, message, details, recoverable)
+    return SSEEvent(error_msg)
 
 
-class SSECompleteEvent(SSEEvent):
-    """SSE event for stream completion"""
-
-    def __init__(self, contract_id: int, reason: str, total_ticks: int,
-                 event_id: Optional[str] = None):
-        data = {
-            "contract_id": contract_id,
-            "reason": reason,
-            "total_ticks": total_ticks
-        }
-        super().__init__("complete", data, event_id)
+def create_complete_event(stream_id: str, reason: str, total_ticks: int, duration_seconds: float, final_sequence: Optional[int] = None) -> SSEEvent:
+    """Create SSE completion event with v2 protocol structure."""
+    complete_msg = CompleteMessage(stream_id, reason, total_ticks, duration_seconds, final_sequence)
+    return SSEEvent(complete_msg)
 
 
-class SSEInfoEvent(SSEEvent):
-    """SSE event for stream information"""
-
-    def __init__(self, contract_id: int, info: Dict[str, Any], event_id: Optional[str] = None):
-        data = {
-            "contract_id": contract_id,
-            "info": info
-        }
-        super().__init__("info", data, event_id)
+def create_info_event(stream_id: str, status: str, contract_info: Optional[Dict[str, Any]] = None, stream_config: Optional[Dict[str, Any]] = None) -> SSEEvent:
+    """Create SSE info event with v2 protocol structure."""
+    info_msg = InfoMessage(stream_id, status, contract_info, stream_config)
+    return SSEEvent(info_msg)
 
 
 class SSEStreamingResponse(StreamingResponse):
-    """Custom streaming response for SSE"""
+    """Custom streaming response for SSE with v2 protocol headers."""
 
     def __init__(self, content: AsyncGenerator[str, None], **kwargs):
-        # Set proper SSE headers
+        # Set proper SSE headers with v2 version
         headers = kwargs.get("headers", {})
         headers.update({
             "Content-Type": "text/event-stream",
@@ -107,6 +78,7 @@ class SSEStreamingResponse(StreamingResponse):
             "Connection": "keep-alive",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Cache-Control",
+            "X-IB-Stream-Version": "2.0.0",
         })
         kwargs["headers"] = headers
 
@@ -114,23 +86,19 @@ class SSEStreamingResponse(StreamingResponse):
 
 
 async def create_sse_generator(events: AsyncGenerator[SSEEvent, None]) -> AsyncGenerator[str, None]:
-    """Convert SSE events to formatted strings"""
+    """Convert SSE events to formatted strings."""
     try:
         async for event in events:
             yield event.format()
     except Exception as e:
         logger.error("Error in SSE generator: %s", e)
-        # Send error event
-        error_event = SSEErrorEvent(
-            contract_id=0,
-            error_code="STREAM_ERROR",
-            message=f"Stream error: {str(e)}"
-        )
+        # Send error event with empty stream_id (connection-level error)
+        error_event = create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
         yield error_event.format()
 
 
 def create_sse_response(events: AsyncGenerator[SSEEvent, None]) -> SSEStreamingResponse:
-    """Create SSE streaming response from events"""
+    """Create SSE streaming response from events."""
     return SSEStreamingResponse(
         content=create_sse_generator(events),
         media_type="text/event-stream"
@@ -138,56 +106,63 @@ def create_sse_response(events: AsyncGenerator[SSEEvent, None]) -> SSEStreamingR
 
 
 def create_heartbeat_event() -> SSEEvent:
-    """Create a heartbeat event to keep connection alive"""
-    return SSEEvent("heartbeat", {"message": "heartbeat"})
+    """Create a heartbeat event to keep connection alive."""
+    from .protocol_types import V2Message
+    heartbeat_msg = V2Message("heartbeat", "", {"message": "heartbeat"})
+    return SSEEvent(heartbeat_msg)
 
 
-def create_stream_started_event(contract_id: int, tick_type: str,
-                               contract_info: Optional[Dict[str, Any]] = None) -> SSEInfoEvent:
-    """Create event to signal stream start"""
-    info = {
-        "message": "Stream started",
+def create_stream_started_event(stream_id: str, tick_type: str, contract_info: Optional[Dict[str, Any]] = None) -> SSEEvent:
+    """Create event to signal stream start."""
+    stream_config = {
         "tick_type": tick_type,
         "contract_info": contract_info
     }
-    return SSEInfoEvent(contract_id, info)
+    return create_info_event(stream_id, "subscribed", contract_info, stream_config)
 
 
-def create_connection_error_event(contract_id: int, error_message: str) -> SSEErrorEvent:
-    """Create event for connection errors"""
-    return SSEErrorEvent(
-        contract_id=contract_id,
-        error_code="CONNECTION_ERROR",
-        message=error_message,
-        details="Check TWS connection and try again"
+def create_connection_error_event(stream_id: str, error_message: str) -> SSEEvent:
+    """Create event for connection errors."""
+    return create_error_event(
+        stream_id,
+        "CONNECTION_ERROR",
+        error_message,
+        {"suggestion": "Check TWS connection and try again"},
+        recoverable=True
     )
 
 
-def create_contract_not_found_event(contract_id: int) -> SSEErrorEvent:
-    """Create event for contract not found errors"""
-    return SSEErrorEvent(
-        contract_id=contract_id,
-        error_code="CONTRACT_NOT_FOUND",
-        message=f"Could not find contract with ID {contract_id}",
-        details="Verify contract ID using the contract lookup API"
+def create_contract_not_found_event(stream_id: str, contract_id: int) -> SSEEvent:
+    """Create event for contract not found errors."""
+    return create_error_event(
+        stream_id,
+        "CONTRACT_NOT_FOUND",
+        f"Could not find contract with ID {contract_id}",
+        {
+            "contract_id": contract_id,
+            "suggestion": "Verify contract ID using the contract lookup API"
+        },
+        recoverable=False
     )
 
 
-def create_rate_limit_error_event(contract_id: int) -> SSEErrorEvent:
-    """Create event for rate limit errors"""
-    return SSEErrorEvent(
-        contract_id=contract_id,
-        error_code="RATE_LIMIT_EXCEEDED",
-        message="Too many concurrent streams",
-        details="Try again later or reduce concurrent connections"
+def create_rate_limit_error_event(stream_id: str) -> SSEEvent:
+    """Create event for rate limit errors."""
+    return create_error_event(
+        stream_id,
+        "RATE_LIMIT_EXCEEDED",
+        "Too many concurrent streams",
+        {"suggestion": "Try again later or reduce concurrent connections"},
+        recoverable=True
     )
 
 
-def create_timeout_error_event(contract_id: int, timeout_seconds: int) -> SSEErrorEvent:
-    """Create event for timeout errors"""
-    return SSEErrorEvent(
-        contract_id=contract_id,
-        error_code="STREAM_TIMEOUT",
-        message=f"Stream timeout after {timeout_seconds} seconds",
-        details="Stream automatically terminated due to timeout"
+def create_timeout_error_event(stream_id: str, timeout_seconds: int) -> SSEEvent:
+    """Create event for timeout errors."""
+    return create_error_event(
+        stream_id,
+        "STREAM_TIMEOUT",
+        f"Stream timeout after {timeout_seconds} seconds",
+        {"suggestion": "Stream automatically terminated due to timeout"},
+        recoverable=True
     )

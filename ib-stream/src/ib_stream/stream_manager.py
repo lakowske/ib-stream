@@ -2,7 +2,7 @@
 StreamManager and StreamHandler classes for isolated multi-stream support.
 
 This module provides request-ID based stream isolation to prevent cross-contamination
-between concurrent streams for different contracts.
+between concurrent streams for different contracts. Compatible with v2 protocol stream IDs.
 """
 
 import asyncio
@@ -27,7 +27,8 @@ class StreamHandler:
                  timeout: Optional[int] = None,
                  tick_callback: Optional[Callable] = None,
                  error_callback: Optional[Callable] = None,
-                 complete_callback: Optional[Callable] = None):
+                 complete_callback: Optional[Callable] = None,
+                 stream_id: Optional[str] = None):
         self.request_id = request_id
         self.contract_id = contract_id
         self.tick_type = tick_type
@@ -36,6 +37,7 @@ class StreamHandler:
         self.tick_callback = tick_callback
         self.error_callback = error_callback
         self.complete_callback = complete_callback
+        self.stream_id = stream_id  # v2 protocol stream ID for reference
         
         # Stream state (isolated per stream)
         self.tick_count = 0
@@ -43,8 +45,12 @@ class StreamHandler:
         self.start_time = time.time()
         self.contract_details = None
         
-        logger.info("Created StreamHandler for request_id %d, contract %d, type %s", 
-                   request_id, contract_id, tick_type)
+        if stream_id:
+            logger.info("Created StreamHandler for request_id %d (stream_id %s), contract %d, type %s", 
+                       request_id, stream_id, contract_id, tick_type)
+        else:
+            logger.info("Created StreamHandler for request_id %d, contract %d, type %s", 
+                       request_id, contract_id, tick_type)
     
     async def process_tick(self, tick_data: Dict[str, Any]):
         """Process incoming tick data for this specific stream."""
@@ -117,7 +123,7 @@ class StreamHandler:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get stream statistics."""
-        return {
+        stats = {
             "request_id": self.request_id,
             "contract_id": self.contract_id, 
             "tick_type": self.tick_type,
@@ -127,6 +133,9 @@ class StreamHandler:
             "limit": self.limit,
             "timeout": self.timeout
         }
+        if self.stream_id:
+            stats["stream_id"] = self.stream_id
+        return stats
 
 
 class StreamManager:

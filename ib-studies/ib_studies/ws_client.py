@@ -1,5 +1,5 @@
 """
-WebSocket client for IB-Studies to connect to IB Stream WebSocket API.
+WebSocket client for IB-Studies to connect to IB Stream v2 WebSocket API.
 """
 
 import asyncio
@@ -13,20 +13,22 @@ import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from ib_studies.models import StreamConfig
+from ib_studies.v2_utils import normalize_tick_type
 
 logger = logging.getLogger(__name__)
 
 
 class WebSocketStreamClient:
-    """WebSocket client for consuming IB-Stream data."""
+    """WebSocket client for consuming IB-Stream v2 protocol data."""
     
     def __init__(self, config: Optional[StreamConfig] = None):
-        """Initialize WebSocket stream client."""
+        """Initialize v2 WebSocket stream client."""
         self.config = config or StreamConfig()
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.message_id = 0
         self.pending_messages: Dict[str, asyncio.Future] = {}
         self.subscriptions: Dict[str, Callable] = {}
+        self.stream_callbacks: Dict[str, Callable] = {}  # stream_id -> callback
         self.connected = False
         self._stop_event = asyncio.Event()
         self._message_handler_task: Optional[asyncio.Task] = None
@@ -45,17 +47,17 @@ class WebSocketStreamClient:
     
     async def connect(self, contract_id: int, tick_types: List[str]) -> None:
         """
-        Connect to WebSocket and subscribe to tick types.
+        Connect to v2 WebSocket and subscribe to tick types.
         
         Args:
             contract_id: Contract ID to stream
             tick_types: List of tick types to subscribe to
         """
         try:
-            # Use multi endpoint for multiple streams
-            ws_url = self._get_ws_url(f"/ws/stream/{contract_id}/multi")
+            # Use v2 WebSocket endpoint
+            ws_url = self._get_ws_url("/v2/ws/stream")
             
-            logger.info("Connecting to WebSocket: %s", ws_url)
+            logger.info("Connecting to v2 WebSocket: %s", ws_url)
             self.ws = await websockets.connect(
                 ws_url,
                 ping_interval=30,
@@ -64,7 +66,7 @@ class WebSocketStreamClient:
             )
             
             self.connected = True
-            logger.info("WebSocket connected successfully")
+            logger.info("v2 WebSocket connected successfully")
             
             # Start message handler
             self._message_handler_task = asyncio.create_task(self._message_handler())
@@ -72,84 +74,52 @@ class WebSocketStreamClient:
             # Wait for connected message
             await asyncio.sleep(0.1)  # Give server time to send connected message
             
-            # Subscribe to tick types
-            if len(tick_types) == 1:
-                # Use single subscribe for single tick type
-                await self._subscribe_single(contract_id, tick_types[0])
-            else:
-                # Use multi-subscribe for multiple tick types
-                await self._subscribe_multi(contract_id, tick_types)
+            # Subscribe to tick types using v2 protocol
+            await self._subscribe_v2(contract_id, tick_types)
                 
         except Exception as e:
-            logger.error("Failed to connect to WebSocket: %s", e)
+            logger.error("Failed to connect to v2 WebSocket: %s", e)
             self.connected = False
             raise
     
-    async def _subscribe_single(self, contract_id: int, tick_type: str) -> str:
-        """Subscribe to a single tick type."""
+    async def _subscribe_v2(self, contract_id: int, tick_types: List[str]) -> List[str]:
+        """Subscribe to tick types using v2 protocol."""
+        from datetime import datetime
+        
         msg_id = f"msg-{self._get_next_message_id()}"
         
         future = asyncio.Future()
         self.pending_messages[msg_id] = future
         
-        params = {}
+        # Convert tick types to v2 format (snake_case)
+        v2_tick_types = [normalize_tick_type(t) for t in tick_types]
+        
+        config = {}
         if self.config.timeout is not None:
-            params["timeout"] = self.config.timeout
+            config["timeout_seconds"] = self.config.timeout
             
         message = {
             "type": "subscribe",
             "id": msg_id,
+            "timestamp": datetime.utcnow().isoformat() + 'Z',
             "data": {
                 "contract_id": contract_id,
-                "tick_type": tick_type,
-                "params": params
+                "tick_types": v2_tick_types,
+                "config": config
             }
         }
         
         await self.ws.send(json.dumps(message))
-        logger.debug("Sent subscribe message: %s", message)
+        logger.debug("Sent v2 subscribe message: %s", message)
         
         # Wait for subscription confirmation
         try:
-            request_id = await asyncio.wait_for(future, timeout=10.0)
-            logger.info("Subscribed to %s for contract %d, request_id: %s", 
-                       tick_type, contract_id, request_id)
-            return request_id
+            stream_ids = await asyncio.wait_for(future, timeout=10.0)
+            logger.info("v2 subscribed to %s for contract %d, stream_ids: %s", 
+                       v2_tick_types, contract_id, stream_ids)
+            return stream_ids
         except asyncio.TimeoutError:
-            logger.error("Timeout waiting for subscription confirmation")
-            raise
-    
-    async def _subscribe_multi(self, contract_id: int, tick_types: List[str]) -> List[str]:
-        """Subscribe to multiple tick types."""
-        msg_id = f"msg-{self._get_next_message_id()}"
-        
-        future = asyncio.Future()
-        self.pending_messages[msg_id] = future
-        
-        params = {}
-        if self.config.timeout is not None:
-            params["timeout"] = self.config.timeout
-            
-        message = {
-            "type": "multi_subscribe",
-            "id": msg_id,
-            "data": {
-                "contract_id": contract_id,
-                "tick_types": tick_types,
-                "params": params
-            }
-        }
-        
-        await self.ws.send(json.dumps(message))
-        logger.debug("Sent multi-subscribe message: %s", message)
-        
-        # Wait for subscription confirmation
-        try:
-            result = await asyncio.wait_for(future, timeout=10.0)
-            logger.info("Multi-subscribed to %s for contract %d", tick_types, contract_id)
-            return result
-        except asyncio.TimeoutError:
-            logger.error("Timeout waiting for multi-subscription confirmation")
+            logger.error("Timeout waiting for v2 subscription confirmation")
             raise
     
     def _get_next_message_id(self) -> int:
@@ -157,21 +127,24 @@ class WebSocketStreamClient:
         self.message_id += 1
         return self.message_id
     
-    async def consume(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
+    async def consume(self, callback: Callable[[str, Dict[str, Any], str, str], None]) -> None:
         """
-        Consume messages from WebSocket.
+        Consume messages from v2 WebSocket.
         
         Args:
-            callback: Function to call for each tick (tick_type, data)
+            callback: Function to call for each tick (tick_type, data, stream_id, timestamp)
         """
         if not self.connected:
-            raise RuntimeError("Not connected to WebSocket")
+            raise RuntimeError("Not connected to v2 WebSocket")
+        
+        # Store the callback for message processing
+        self.main_callback = callback
         
         try:
             # Wait until stop event is set
             await self._stop_event.wait()
         except Exception as e:
-            logger.error("Error in consume loop: %s", e)
+            logger.error("Error in v2 consume loop: %s", e)
             raise
     
     async def _message_handler(self) -> None:
@@ -198,85 +171,114 @@ class WebSocketStreamClient:
             self.connected = False
     
     async def _process_message(self, data: Dict[str, Any]) -> None:
-        """Process a single WebSocket message."""
+        """Process a single v2 WebSocket message."""
         message_type = data.get("type")
-        logger.debug("Processing message type: %s", message_type)
+        logger.debug("Processing v2 message type: %s", message_type)
         
         if message_type == "connected":
-            logger.info("Received connected message: %s", data)
+            logger.info("Received v2 connected message: %s", data)
             
         elif message_type == "subscribed":
-            # Handle single subscription confirmation
+            # Handle v2 subscription confirmation
             msg_id = data.get("id")
             if msg_id and msg_id in self.pending_messages:
                 future = self.pending_messages.pop(msg_id)
-                request_id = data["data"]["request_id"]
-                future.set_result(request_id)
-                
-        elif message_type == "multi_subscribed":
-            # Handle multi-subscription confirmation
-            msg_id = data.get("id")
-            if msg_id and msg_id in self.pending_messages:
-                future = self.pending_messages.pop(msg_id)
-                subscriptions = data["data"]["subscriptions"]
-                request_ids = [sub["request_id"] for sub in subscriptions]
-                future.set_result(request_ids)
+                streams = data["data"]["streams"]
+                stream_ids = [stream["stream_id"] for stream in streams]
+                future.set_result(stream_ids)
                 
         elif message_type == "tick":
-            # Handle tick data
-            await self._handle_tick(data)
+            # Handle v2 tick data
+            await self._handle_v2_tick(data)
             
         elif message_type == "error":
-            logger.error("Received error message: %s", data.get("error", {}))
+            stream_id = data.get("stream_id", "")
+            error_data = data.get("data", {})
+            error_code = error_data.get("code", "unknown")
+            logger.error("Received v2 error message (stream_id=%s): %s", stream_id, error_data)
+            
+            # If this is a timeout error, stop the client
+            if error_code == "STREAM_TIMEOUT":
+                logger.info("Received timeout error - stopping WebSocket client")
+                self._stop_event.set()
             
         elif message_type == "complete":
-            request_id = data.get("request_id")
-            reason = data.get("data", {}).get("reason", "unknown")
-            total_ticks = data.get("data", {}).get("total_ticks", 0)
-            logger.info("Stream %s completed: %s (%d ticks)", request_id, reason, total_ticks)
+            stream_id = data.get("stream_id", "")
+            complete_data = data.get("data", {})
+            reason = complete_data.get("reason", "unknown")
+            total_ticks = complete_data.get("total_ticks", 0)
+            logger.info("v2 Stream %s completed: %s (%d ticks)", stream_id, reason, total_ticks)
+            
+            # If completed due to timeout, stop the client
+            if reason == "timeout":
+                logger.info("Stream completed due to timeout - stopping WebSocket client")
+                self._stop_event.set()
             
         elif message_type == "pong":
-            logger.debug("Received pong: %s", data)
+            logger.debug("Received v2 pong: %s", data)
             
         else:
-            logger.warning("Unknown message type: %s", message_type)
+            logger.warning("Unknown v2 message type: %s", message_type)
     
-    async def _handle_tick(self, data: Dict[str, Any]) -> None:
-        """Handle tick data message."""
-        request_id = data.get("request_id")
-        tick_data = data.get("data", {})
-        tick_type = tick_data.get("type", "unknown")
+    async def _handle_v2_tick(self, message: Dict[str, Any]) -> None:
+        """Handle v2 protocol tick data message."""
+        stream_id = message.get("stream_id", "")
+        timestamp = message.get("timestamp", "")
+        tick_data = message.get("data", {})
+        tick_type = tick_data.get("tick_type", "unknown")
         
-        logger.debug("Received tick for %s: %s", request_id, tick_type)
+        logger.debug("Received v2 tick for %s: %s", stream_id, tick_type)
         
-        # Call registered callbacks
-        for callback in self.subscriptions.values():
+        # Convert snake_case to expected format for backward compatibility
+        tick_type_map = {
+            "bid_ask": "BidAsk",
+            "last": "Last",
+            "all_last": "AllLast",
+            "mid_point": "MidPoint"
+        }
+        
+        mapped_type = tick_type_map.get(tick_type, tick_type)
+        
+        # Call main callback if available
+        if hasattr(self, 'main_callback') and self.main_callback:
+            try:
+                if asyncio.iscoroutinefunction(self.main_callback):
+                    await self.main_callback(mapped_type, tick_data, stream_id, timestamp)
+                else:
+                    self.main_callback(mapped_type, tick_data, stream_id, timestamp)
+            except Exception as e:
+                logger.error("Error in v2 main callback: %s", e)
+        
+        # Call stream-specific callbacks if available
+        if stream_id in self.stream_callbacks:
+            callback = self.stream_callbacks[stream_id]
             try:
                 if asyncio.iscoroutinefunction(callback):
-                    await callback(tick_type, tick_data)
+                    await callback(mapped_type, tick_data, stream_id, timestamp)
                 else:
-                    callback(tick_type, tick_data)
+                    callback(mapped_type, tick_data, stream_id, timestamp)
             except Exception as e:
-                logger.error("Error in tick callback: %s", e)
+                logger.error("Error in v2 stream callback: %s", e)
     
     def register_callback(self, request_id: str, callback: Callable) -> None:
         """Register a callback for a specific request ID."""
         self.subscriptions[request_id] = callback
     
     async def ping(self) -> None:
-        """Send ping to server."""
+        """Send v2 ping to server."""
         if not self.connected:
             return
         
+        from datetime import datetime
         msg_id = f"msg-{self._get_next_message_id()}"
         message = {
             "type": "ping",
             "id": msg_id,
-            "timestamp": time.time()
+            "timestamp": datetime.utcnow().isoformat() + 'Z'
         }
         
         await self.ws.send(json.dumps(message))
-        logger.debug("Sent ping")
+        logger.debug("Sent v2 ping")
     
     async def stop(self) -> None:
         """Stop the WebSocket client."""
@@ -292,8 +294,11 @@ class WebSocketStreamClient:
             except asyncio.CancelledError:
                 pass
         
-        if self.ws and not self.ws.closed:
-            await self.ws.close()
+        if self.ws and self.connected:
+            try:
+                await self.ws.close()
+            except Exception as e:
+                logger.debug("Error closing WebSocket: %s", e)
         
         self.connected = False
         self.pending_messages.clear()
@@ -331,50 +336,47 @@ class WebSocketStreamClient:
 
 
 class WebSocketMultiStreamClient:
-    """Multi-stream WebSocket client for consuming multiple data types simultaneously."""
+    """Multi-stream v2 WebSocket client for consuming multiple data types simultaneously."""
     
     def __init__(self, config: Optional[StreamConfig] = None):
-        """Initialize multi-stream WebSocket client."""
+        """Initialize v2 multi-stream WebSocket client."""
         self.config = config or StreamConfig()
         self.client = WebSocketStreamClient(config)
         self._callbacks: Dict[str, Callable] = {}
         
     async def connect_multiple(self, contract_id: int, tick_types: List[str], 
-                              callback: Callable[[str, Dict], None]) -> None:
+                              callback: Callable[[str, Dict, str, str], None]) -> None:
         """
-        Connect to multiple streams for the same contract.
+        Connect to multiple v2 streams for the same contract.
         
         Args:
             contract_id: Contract ID to stream
             tick_types: List of tick types (BidAsk, Last, AllLast, MidPoint)
-            callback: Async function to call for each tick (tick_type, data)
+            callback: Async function to call for each tick (tick_type, data, stream_id, timestamp)
         """
         # Store the callback
         self._callbacks["main"] = callback
         
-        # Register callback with client
-        self.client.register_callback("main", self._handle_tick)
-        
-        # Connect to WebSocket
+        # Connect to v2 WebSocket
         await self.client.connect(contract_id, tick_types)
         
-        logger.info("Connected to %d streams for contract %d: %s", 
+        logger.info("Connected to %d v2 streams for contract %d: %s", 
                    len(tick_types), contract_id, tick_types)
     
-    async def _handle_tick(self, tick_type: str, data: Dict[str, Any]) -> None:
-        """Internal tick handler that routes to user callback."""
+    async def _handle_tick(self, tick_type: str, data: Dict[str, Any], stream_id: str, timestamp: str) -> None:
+        """Internal v2 tick handler that routes to user callback."""
         callback = self._callbacks.get("main")
         if callback:
             try:
                 if asyncio.iscoroutinefunction(callback):
-                    await callback(tick_type, data)
+                    await callback(tick_type, data, stream_id, timestamp)
                 else:
-                    callback(tick_type, data)
+                    callback(tick_type, data, stream_id, timestamp)
             except Exception as e:
-                logger.error("Error in user callback: %s", e)
+                logger.error("Error in v2 user callback: %s", e)
     
-    async def consume(self, callback: Callable[[str, Dict], None]) -> None:
-        """Start consuming messages."""
+    async def consume(self, callback: Callable[[str, Dict, str, str], None]) -> None:
+        """Start consuming v2 messages."""
         await self.client.consume(callback)
     
     async def stop(self) -> None:

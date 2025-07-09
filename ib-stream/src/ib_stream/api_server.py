@@ -16,20 +16,36 @@ from typing import Any, AsyncGenerator, Dict, Optional
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import JSONResponse
 
-from .config import create_config, is_valid_tick_type
+from .config import create_config, is_valid_tick_type, convert_v2_tick_type_to_tws_api
+# Legacy v1 imports - will need to add these back for v1 endpoints
+# from .sse_response_v1 import (
+#     SSECompleteEvent,
+#     SSEErrorEvent, 
+#     SSETickEvent,
+#     create_rate_limit_error_event,
+#     create_sse_response,
+#     create_stream_started_event,
+#     create_timeout_error_event,
+# )
+# v2 protocol imports
 from .sse_response import (
-    SSECompleteEvent,
-    SSEErrorEvent,
-    SSETickEvent,
-    create_rate_limit_error_event,
-    create_sse_response,
-    create_stream_started_event,
-    create_timeout_error_event,
+    SSEEvent,
+    create_tick_event,
+    create_error_event,
+    create_complete_event,
+    create_info_event,
+    create_stream_started_event as create_v2_stream_started_event,
+    create_connection_error_event,
+    create_contract_not_found_event,
+    create_rate_limit_error_event as create_v2_rate_limit_error_event,
+    create_timeout_error_event as create_v2_timeout_error_event,
+    SSEStreamingResponse
 )
 from .streaming_app import StreamingApp
 from .utils import connect_to_tws
 from .ws_response import websocket_endpoint, websocket_control_endpoint
 from .ws_manager import ws_manager
+from .stream_id import generate_stream_id, generate_multi_stream_id
 
 # Load configuration
 config = create_config()
@@ -219,159 +235,160 @@ async def stream_info():
     }
 
 
-async def stream_contract_data(contract_id: int, tick_type: str, limit: Optional[int] = None,
-                              timeout: Optional[int] = None) -> AsyncGenerator[Any, None]:
-    """Stream contract data via SSE using StreamManager for isolation"""
-    from .stream_manager import stream_manager, StreamHandler
-    
-    if timeout is None:
-        timeout = config.default_timeout_seconds
-
-    # Check if we're at max streams
-    current_stream_count = stream_manager.get_stream_count()
-    if current_stream_count >= config.max_concurrent_streams:
-        event = create_rate_limit_error_event(contract_id)
-        yield event
-        return
-
-    # Generate unique request ID
-    import time
-    import random
-    req_id = int(time.time() * 1000) % 100000 + random.randint(1, 999)
-    
-    # Create event queue for this stream
-    event_queue = asyncio.Queue()
-    stream_id = f"{contract_id}_{tick_type}_{id(event_queue)}"
-    
-    logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s", 
-                contract_id, tick_type, limit, timeout)
-    logger.info("Starting stream %s for contract %d", stream_id, contract_id)
-    logger.info("Using request ID %d for stream %s", req_id, stream_id)
-
-    try:
-        # Get TWS connection
-        app_instance = ensure_tws_connection()
-        
-        # Create callback functions for SSE events
-        async def on_tick(tick_data: Dict[str, Any]):
-            event = SSETickEvent(contract_id, tick_data)
-            try:
-                await event_queue.put(event)
-            except Exception as e:
-                logger.warning("Failed to queue tick event for stream %s: %s", stream_id, e)
-
-        async def on_error(error_code: str, message: str):
-            event = SSEErrorEvent(contract_id, error_code, message)
-            try:
-                await event_queue.put(event)
-            except Exception as e:
-                logger.warning("Failed to queue error event for stream %s: %s", stream_id, e)
-
-        async def on_complete(reason: str, total_ticks: int):
-            event = SSECompleteEvent(contract_id, reason, total_ticks)
-            try:
-                await event_queue.put(event)
-            except Exception as e:
-                logger.warning("Failed to queue complete event for stream %s: %s", stream_id, e)
-
-        # Create StreamHandler for this stream
-        stream_handler = StreamHandler(
-            request_id=req_id,
-            contract_id=contract_id,
-            tick_type=tick_type,
-            limit=limit,
-            timeout=timeout,
-            tick_callback=on_tick,
-            error_callback=on_error,
-            complete_callback=on_complete
-        )
-        
-        # Set the request ID on the app instance BEFORE registering anything
-        app_instance.req_id = req_id
-        
-        # Register the stream with StreamManager
-        stream_manager.register_stream(stream_handler)
-        
-        # Register stream in active_streams for tracking
-        with stream_lock:
-            active_streams[stream_id] = {
-                "contract_id": contract_id,
-                "tick_type": tick_type,
-                "start_time": datetime.now(),
-                "request_id": req_id,
-                "app": app_instance,
-                "queue": event_queue
-            }
-
-        # Start streaming in background
-        async def start_stream():
-            try:
-                logger.info("Starting TWS stream for request ID %d", req_id)
-
-                # Start streaming - this will route through StreamManager
-                app_instance.stream_contract(contract_id, tick_type)
-
-                # Send start event
-                start_event = create_stream_started_event(contract_id, tick_type)
-                await event_queue.put(start_event)
-
-            except Exception as e:
-                import traceback
-                error_msg = f"{str(e)}\n{traceback.format_exc()}"
-                logger.error("Detailed stream start error: %s", error_msg)
-                error_event = SSEErrorEvent(contract_id, "STREAM_START_ERROR", str(e))
-                await event_queue.put(error_event)
-
-        # Start the stream
-        asyncio.create_task(start_stream())
-
-        # Stream events with timeout
-        start_time = time.time()
-        while True:
-            try:
-                # Check timeout only if one is set
-                if timeout is not None and time.time() - start_time > timeout:
-                    timeout_event = create_timeout_error_event(contract_id, timeout)
-                    yield timeout_event
-                    break
-
-                # Get next event with timeout
-                event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
-                yield event
-
-                # Check if stream is complete
-                if isinstance(event, SSECompleteEvent):
-                    break
-
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                import traceback
-                error_msg = f"{str(e)}\n{traceback.format_exc()}"
-                logger.error("Error in stream %s: %s", stream_id, error_msg)
-                error_event = SSEErrorEvent(contract_id, "STREAM_ERROR", str(e))
-                yield error_event
-                break
-
-    finally:
-        # Unregister from StreamManager
-        stream_manager.unregister_stream(req_id)
-        
-        # Clean up
-        with stream_lock:
-            if stream_id in active_streams:
-                try:
-                    app_data = active_streams[stream_id]
-                    if "app" in app_data and "request_id" in app_data:
-                        app_data["app"].cancelTickByTickData(app_data["request_id"])
-                        # Clean up request-specific data
-                        app_data["app"].cleanup_request(app_data["request_id"])
-                except Exception as e:
-                    import traceback
-                    logger.error("Error cleaning up stream %s: %s\nTraceback:\n%s", stream_id, e, traceback.format_exc())
-                del active_streams[stream_id]
-
-        logger.info("Stream %s ended", stream_id)
+# V1 SSE streaming function - commented out for now since we're implementing v2
+# async def stream_contract_data(contract_id: int, tick_type: str, limit: Optional[int] = None,
+#                               timeout: Optional[int] = None) -> AsyncGenerator[Any, None]:
+#     """Stream contract data via SSE using StreamManager for isolation"""
+#     from .stream_manager import stream_manager, StreamHandler
+#     
+#     if timeout is None:
+#         timeout = config.default_timeout_seconds
+# 
+#     # Check if we're at max streams
+#     current_stream_count = stream_manager.get_stream_count()
+#     if current_stream_count >= config.max_concurrent_streams:
+#         event = create_rate_limit_error_event(contract_id)
+#         yield event
+#         return
+# 
+#     # Generate unique request ID
+#     import time
+#     import random
+#     req_id = int(time.time() * 1000) % 100000 + random.randint(1, 999)
+#     
+#     # Create event queue for this stream
+#     event_queue = asyncio.Queue()
+#     stream_id = f"{contract_id}_{tick_type}_{id(event_queue)}"
+#     
+#     logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s", 
+#                 contract_id, tick_type, limit, timeout)
+#     logger.info("Starting stream %s for contract %d", stream_id, contract_id)
+#     logger.info("Using request ID %d for stream %s", req_id, stream_id)
+# 
+#     try:
+#         # Get TWS connection
+#         app_instance = ensure_tws_connection()
+#         
+#         # Create callback functions for SSE events
+#         async def on_tick(tick_data: Dict[str, Any]):
+#             event = SSETickEvent(contract_id, tick_data)
+#             try:
+#                 await event_queue.put(event)
+#             except Exception as e:
+#                 logger.warning("Failed to queue tick event for stream %s: %s", stream_id, e)
+# 
+#         async def on_error(error_code: str, message: str):
+#             event = SSEErrorEvent(contract_id, error_code, message)
+#             try:
+#                 await event_queue.put(event)
+#             except Exception as e:
+#                 logger.warning("Failed to queue error event for stream %s: %s", stream_id, e)
+# 
+#         async def on_complete(reason: str, total_ticks: int):
+#             event = SSECompleteEvent(contract_id, reason, total_ticks)
+#             try:
+#                 await event_queue.put(event)
+#             except Exception as e:
+#                 logger.warning("Failed to queue complete event for stream %s: %s", stream_id, e)
+# 
+#         # Create StreamHandler for this stream
+#         stream_handler = StreamHandler(
+#             request_id=req_id,
+#             contract_id=contract_id,
+#             tick_type=tick_type,
+#             limit=limit,
+#             timeout=timeout,
+#             tick_callback=on_tick,
+#             error_callback=on_error,
+#             complete_callback=on_complete
+#         )
+#         
+#         # Set the request ID on the app instance BEFORE registering anything
+#         app_instance.req_id = req_id
+#         
+#         # Register the stream with StreamManager
+#         stream_manager.register_stream(stream_handler)
+#         
+#         # Register stream in active_streams for tracking
+#         with stream_lock:
+#             active_streams[stream_id] = {
+#                 "contract_id": contract_id,
+#                 "tick_type": tick_type,
+#                 "start_time": datetime.now(),
+#                 "request_id": req_id,
+#                 "app": app_instance,
+#                 "queue": event_queue
+#             }
+# 
+#         # Start streaming in background
+#         async def start_stream():
+#             try:
+#                 logger.info("Starting TWS stream for request ID %d", req_id)
+# 
+#                 # Start streaming - this will route through StreamManager
+#                 app_instance.stream_contract(contract_id, tick_type)
+# 
+#                 # Send start event
+#                 start_event = create_stream_started_event(contract_id, tick_type)
+#                 await event_queue.put(start_event)
+# 
+#             except Exception as e:
+#                 import traceback
+#                 error_msg = f"{str(e)}\n{traceback.format_exc()}"
+#                 logger.error("Detailed stream start error: %s", error_msg)
+#                 error_event = SSEErrorEvent(contract_id, "STREAM_START_ERROR", str(e))
+#                 await event_queue.put(error_event)
+# 
+#         # Start the stream
+#         asyncio.create_task(start_stream())
+# 
+#         # Stream events with timeout
+#         start_time = time.time()
+#         while True:
+#             try:
+#                 # Check timeout only if one is set
+#                 if timeout is not None and time.time() - start_time > timeout:
+#                     timeout_event = create_timeout_error_event(contract_id, timeout)
+#                     yield timeout_event
+#                     break
+# 
+#                 # Get next event with timeout
+#                 event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+#                 yield event
+# 
+#                 # Check if stream is complete
+#                 if isinstance(event, SSECompleteEvent):
+#                     break
+# 
+#             except asyncio.TimeoutError:
+#                 continue
+#             except Exception as e:
+#                 import traceback
+#                 error_msg = f"{str(e)}\n{traceback.format_exc()}"
+#                 logger.error("Error in stream %s: %s", stream_id, error_msg)
+#                 error_event = SSEErrorEvent(contract_id, "STREAM_ERROR", str(e))
+#                 yield error_event
+#                 break
+# 
+#     finally:
+#         # Unregister from StreamManager
+#         stream_manager.unregister_stream(req_id)
+#         
+#         # Clean up
+#         with stream_lock:
+#             if stream_id in active_streams:
+#                 try:
+#                     app_data = active_streams[stream_id]
+#                     if "app" in app_data and "request_id" in app_data:
+#                         app_data["app"].cancelTickByTickData(app_data["request_id"])
+#                         # Clean up request-specific data
+#                         app_data["app"].cleanup_request(app_data["request_id"])
+#                 except Exception as e:
+#                     import traceback
+#                     logger.error("Error cleaning up stream %s: %s\nTraceback:\n%s", stream_id, e, traceback.format_exc())
+#                 del active_streams[stream_id]
+# 
+#         logger.info("Stream %s ended", stream_id)
 
 
 @app.get("/stream/active")
@@ -395,44 +412,45 @@ async def get_active_streams():
         }
 
 
-@app.get("/stream/{contract_id}/{tick_type}")
-async def stream_contract_with_type(
-    contract_id: int,
-    tick_type: str,
-    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
-    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
-):
-    """Stream market data for a contract with explicit tick type via Server-Sent Events"""
-    
-    # Validate tick type
-    if not is_valid_tick_type(tick_type):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(['Last', 'AllLast', 'BidAsk', 'MidPoint'])}"
-        )
-    
-    # Validate limit
-    if limit is not None and (limit < 1 or limit > 10000):
-        raise HTTPException(
-            status_code=400,
-            detail="Limit must be between 1 and 10000"
-        )
-    
-    # Validate timeout
-    if timeout is not None and (timeout < 5 or timeout > 3600):
-        raise HTTPException(
-            status_code=400,
-            detail="Timeout must be between 5 and 3600 seconds"
-        )
-    
-    logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s",
-                contract_id, tick_type, limit, timeout)
-    
-    # Create event generator
-    events = stream_contract_data(contract_id, tick_type, limit, timeout)
-    
-    # Return SSE response
-    return create_sse_response(events)
+# V1 SSE endpoint - commented out for now since we're implementing v2 only
+# @app.get("/stream/{contract_id}/{tick_type}")
+# async def stream_contract_with_type(
+#     contract_id: int,
+#     tick_type: str,
+#     limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
+#     timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+# ):
+#     """Stream market data for a contract with explicit tick type via Server-Sent Events"""
+#     
+#     # Validate tick type
+#     if not is_valid_tick_type(tick_type):
+#         raise HTTPException(
+#             status_code=400,
+#             detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(['Last', 'AllLast', 'BidAsk', 'MidPoint'])}"
+#         )
+#     
+#     # Validate limit
+#     if limit is not None and (limit < 1 or limit > 10000):
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Limit must be between 1 and 10000"
+#         )
+#     
+#     # Validate timeout
+#     if timeout is not None and (timeout < 5 or timeout > 3600):
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Timeout must be between 5 and 3600 seconds"
+#         )
+#     
+#     logger.info("Starting stream for contract %d, type %s, limit %s, timeout %s",
+#                 contract_id, tick_type, limit, timeout)
+#     
+#     # Create event generator
+#     events = stream_contract_data(contract_id, tick_type, limit, timeout)
+#     
+#     # Return SSE response
+#     return create_sse_response(events)
 
 
 
@@ -507,6 +525,338 @@ async def stop_contract_streams(contract_id: int):
         "stopped_streams": stopped_streams,
         "timestamp": datetime.now().isoformat()
     }
+
+
+# V2 Protocol Endpoints
+
+async def stream_contract_data_v2(contract_id: int, tick_types: list, limit: Optional[int] = None,
+                                  timeout: Optional[int] = None) -> AsyncGenerator[SSEEvent, None]:
+    """Stream contract data via SSE using v2 protocol with stream IDs"""
+    from .stream_manager import stream_manager, StreamHandler
+    
+    if timeout is None:
+        timeout = config.default_timeout_seconds
+
+    # Check if we're at max streams
+    current_stream_count = stream_manager.get_stream_count()
+    if current_stream_count >= config.max_concurrent_streams:
+        stream_id = ""  # Empty for connection-level errors
+        event = create_v2_rate_limit_error_event(stream_id)
+        yield event
+        return
+
+    # Normalize tick_types to list
+    if isinstance(tick_types, str):
+        tick_types = [tick_types]
+    
+    # Generate stream IDs for each tick type
+    if len(tick_types) == 1:
+        stream_id = generate_stream_id(contract_id, tick_types[0])
+        stream_ids = [stream_id]
+    else:
+        stream_ids = []
+        for tick_type in tick_types:
+            stream_id = generate_stream_id(contract_id, tick_type)
+            stream_ids.append(stream_id)
+    
+    logger.info("Starting v2 stream for contract %d, types %s, limit %s, timeout %s", 
+                contract_id, tick_types, limit, timeout)
+    
+    # Create event queue for all streams
+    event_queue = asyncio.Queue()
+    handlers = []
+    
+    try:
+        # Get TWS connection
+        app_instance = ensure_tws_connection()
+        
+        # Create handlers for each tick type
+        for tick_type, stream_id in zip(tick_types, stream_ids):
+            # Generate unique request ID for IB API
+            import time
+            import random
+            req_id = int(time.time() * 1000) % 100000 + random.randint(1, 999)
+            
+            # Create callback functions for v2 protocol
+            async def on_tick(tick_data: Dict[str, Any], sid=stream_id, tid=tick_type, cid=contract_id):
+                event = create_tick_event(sid, cid, tid, tick_data)
+                try:
+                    await event_queue.put(event)
+                except Exception as e:
+                    logger.warning("Failed to queue tick event for stream %s: %s", sid, e)
+
+            async def on_error(error_code: str, message: str, sid=stream_id):
+                event = create_error_event(sid, error_code, message)
+                try:
+                    await event_queue.put(event)
+                except Exception as e:
+                    logger.warning("Failed to queue error event for stream %s: %s", sid, e)
+
+            async def on_complete(reason: str, total_ticks: int, sid=stream_id):
+                duration = time.time() - start_time if 'start_time' in locals() else 0.0
+                event = create_complete_event(sid, reason, total_ticks, duration)
+                try:
+                    await event_queue.put(event)
+                except Exception as e:
+                    logger.warning("Failed to queue complete event for stream %s: %s", sid, e)
+
+            # Create StreamHandler for this stream
+            stream_handler = StreamHandler(
+                request_id=req_id,
+                contract_id=contract_id,
+                tick_type=tick_type,
+                limit=limit,
+                timeout=timeout,
+                tick_callback=on_tick,
+                error_callback=on_error,
+                complete_callback=on_complete,
+                stream_id=stream_id
+            )
+            
+            handlers.append((stream_handler, req_id, stream_id, tick_type))
+        
+        # Set request ID and register all handlers
+        for stream_handler, req_id, stream_id, tick_type in handlers:
+            app_instance.req_id = req_id
+            stream_manager.register_stream(stream_handler)
+            
+            # Start streaming for this tick type (convert from v2 to TWS API format)
+            tws_tick_type = convert_v2_tick_type_to_tws_api(tick_type)
+            app_instance.stream_contract(contract_id, tws_tick_type)
+            
+            # Send stream started event
+            start_event = create_v2_stream_started_event(stream_id, tick_type)
+            await event_queue.put(start_event)
+        
+        # Stream events with timeout
+        start_time = time.time()
+        while True:
+            try:
+                # Check timeout only if one is set
+                if timeout is not None and time.time() - start_time > timeout:
+                    for _, _, stream_id, _ in handlers:
+                        timeout_event = create_v2_timeout_error_event(stream_id, timeout)
+                        yield timeout_event
+                    break
+
+                # Get next event with timeout
+                event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                yield event
+
+                # Check if this is a completion event
+                if hasattr(event, 'message') and event.message.type == "complete":
+                    # Remove the completed handler
+                    completed_stream_id = event.message.stream_id
+                    handlers = [(h, r, s, t) for h, r, s, t in handlers if s != completed_stream_id]
+                    
+                    # If all handlers are complete, break
+                    if not handlers:
+                        break
+
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                import traceback
+                error_msg = f"{str(e)}\n{traceback.format_exc()}"
+                logger.error("Error in v2 stream: %s", error_msg)
+                for _, _, stream_id, _ in handlers:
+                    error_event = create_error_event(stream_id, "STREAM_ERROR", str(e))
+                    yield error_event
+                break
+
+    finally:
+        # Unregister all handlers from StreamManager
+        for stream_handler, req_id, stream_id, tick_type in handlers:
+            stream_manager.unregister_stream(req_id)
+        
+        logger.info("V2 streams ended for contract %d", contract_id)
+
+
+@app.get("/v2/stream/{contract_id}/{tick_type}")
+async def stream_contract_v2_single(
+    contract_id: int,
+    tick_type: str,
+    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
+    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+):
+    """Stream market data for a contract with specific tick type via Server-Sent Events (v2 protocol)"""
+    
+    # Validate tick type (convert to v2 format)
+    tick_type_map = {
+        'Last': 'last',
+        'AllLast': 'all_last', 
+        'BidAsk': 'bid_ask',
+        'MidPoint': 'mid_point'
+    }
+    
+    if tick_type in tick_type_map:
+        tick_type = tick_type_map[tick_type]
+    elif tick_type not in ['last', 'all_last', 'bid_ask', 'mid_point']:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tick type: {tick_type}. Valid types: last, all_last, bid_ask, mid_point"
+        )
+    
+    # Validate limit
+    if limit is not None and (limit < 1 or limit > 10000):
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 10000"
+        )
+    
+    # Validate timeout
+    if timeout is not None and (timeout < 5 or timeout > 3600):
+        raise HTTPException(
+            status_code=400,
+            detail="Timeout must be between 5 and 3600 seconds"
+        )
+    
+    logger.info("Starting v2 stream for contract %d, type %s, limit %s, timeout %s",
+                contract_id, tick_type, limit, timeout)
+    
+    # Create event generator
+    events = stream_contract_data_v2(contract_id, [tick_type], limit, timeout)
+    
+    # Return SSE response with v2 headers
+    return SSEStreamingResponse(
+        content=async_sse_generator(events),
+        media_type="text/event-stream"
+    )
+
+
+@app.get("/v2/stream/{contract_id}")
+async def stream_contract_v2_multi(
+    contract_id: int,
+    tick_types: str = Query(..., description="Comma-separated tick types: last,all_last,bid_ask,mid_point"),
+    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
+    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+):
+    """Stream market data for a contract with multiple tick types via Server-Sent Events (v2 protocol)"""
+    
+    # Parse and validate tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+    valid_tick_types = ['last', 'all_last', 'bid_ask', 'mid_point']
+    
+    for tick_type in tick_type_list:
+        if tick_type not in valid_tick_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(valid_tick_types)}"
+            )
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    tick_type_list = [t for t in tick_type_list if not (t in seen or seen.add(t))]
+    
+    # Validate limit
+    if limit is not None and (limit < 1 or limit > 10000):
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 10000"
+        )
+    
+    # Validate timeout
+    if timeout is not None and (timeout < 5 or timeout > 3600):
+        raise HTTPException(
+            status_code=400,
+            detail="Timeout must be between 5 and 3600 seconds"
+        )
+    
+    logger.info("Starting v2 multi-stream for contract %d, types %s, limit %s, timeout %s",
+                contract_id, tick_type_list, limit, timeout)
+    
+    # Create event generator
+    events = stream_contract_data_v2(contract_id, tick_type_list, limit, timeout)
+    
+    # Return SSE response with v2 headers
+    return SSEStreamingResponse(
+        content=async_sse_generator(events),
+        media_type="text/event-stream"
+    )
+
+
+async def async_sse_generator(events: AsyncGenerator[SSEEvent, None]) -> AsyncGenerator[str, None]:
+    """Convert SSE events to formatted strings."""
+    try:
+        async for event in events:
+            yield event.format()
+    except Exception as e:
+        logger.error("Error in SSE generator: %s", e)
+        # Send error event with empty stream_id (connection-level error)
+        error_event = create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
+        yield error_event.format()
+
+
+@app.get("/v2/info")
+async def stream_info_v2():
+    """Information about v2 protocol streaming capabilities"""
+    return {
+        "version": "2.0.0",
+        "protocol": "v2",
+        "usage": {
+            "single_stream": "/v2/stream/{contract_id}/{tick_type}",
+            "multi_stream": "/v2/stream/{contract_id}?tick_types=bid_ask,last",
+            "websocket": "ws://{host}/v2/ws/stream",
+            "description": "Stream market data using v2 unified protocol",
+            "example": "/v2/stream/12345/bid_ask?limit=100&timeout=60",
+        },
+        "tick_types": {
+            "last": "Regular trades during market hours",
+            "all_last": "All trades including pre/post market",
+            "bid_ask": "Real-time bid and ask quotes",
+            "mid_point": "Calculated midpoint between bid and ask",
+        },
+        "query_parameters": {
+            "limit": "Number of ticks before auto-stop (integer, optional, max: 10000)",
+            "timeout": "Stream timeout in seconds (integer, optional, range: 5-3600)",
+            "tick_types": "Comma-separated tick types for multi-stream (string, required for multi-stream)",
+        },
+        "message_structure": {
+            "type": "Message type (tick, error, complete, info)",
+            "stream_id": "Unique stream identifier",
+            "timestamp": "ISO-8601 timestamp with milliseconds",
+            "data": "Message-specific payload",
+            "metadata": "Optional metadata object",
+        },
+        "stream_id_format": "{contract_id}_{tick_type}_{timestamp}_{random}",
+        "limits": {
+            "max_concurrent_streams": config.max_concurrent_streams,
+            "default_timeout_seconds": config.default_timeout_seconds,
+        },
+    }
+
+
+# V2 WebSocket Endpoints
+
+@app.websocket("/v2/ws/stream")
+async def websocket_stream_v2(websocket: WebSocket):
+    """WebSocket endpoint for v2 protocol streaming with dynamic subscriptions."""
+    try:
+        await websocket.accept()
+        
+        # Register connection with WebSocket manager
+        connection_id = await ws_manager.register_connection(websocket)
+        
+        try:
+            while True:
+                # Receive message from client
+                raw_message = await websocket.receive_text()
+                
+                # Handle message through WebSocket manager
+                await ws_manager.handle_message(connection_id, raw_message)
+                
+        except Exception as e:
+            logger.warning("WebSocket connection %s error: %s", connection_id, e)
+        finally:
+            # Unregister connection
+            await ws_manager.unregister_connection(connection_id)
+            
+    except Exception as e:
+        logger.error("WebSocket connection failed: %s", e)
+        try:
+            await websocket.close(code=1011, reason="Internal server error")
+        except:
+            pass
 
 
 # WebSocket Endpoints

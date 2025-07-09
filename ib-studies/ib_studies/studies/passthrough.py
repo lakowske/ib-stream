@@ -26,14 +26,15 @@ class PassThroughStudy(BaseStudy):
         """Pass-through study accepts all tick types."""
         return ["BidAsk", "Last", "AllLast", "MidPoint"]
     
-    def process_tick(self, tick_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process incoming tick data by passing it through."""
+    def process_tick(self, tick_type: str, data: Dict[str, Any], stream_id: str = "", timestamp: str = "") -> Optional[Dict[str, Any]]:
+        """Process incoming v2 tick data by passing it through."""
         self.increment_tick_count()
         
-        # Create standardized output
+        # Create standardized v2 output
         output = {
             "study": "passthrough",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp or datetime.now().isoformat(),
+            "stream_id": stream_id,
             "tick_type": tick_type,
             "data": data,
             "metadata": {
@@ -48,22 +49,29 @@ class PassThroughStudy(BaseStudy):
         if len(self.tick_history) > 100:
             self.tick_history.pop(0)
         
-        logger.debug("PassThrough tick #%d: %s -> %s", self._tick_count, tick_type, data)
+        logger.debug("PassThrough v2 tick #%d: stream_id=%s, tick_type=%s -> %s", 
+                    self._tick_count, stream_id, tick_type, data)
         
         return output
     
     def get_summary(self) -> Dict[str, Any]:
-        """Get summary of tick activity."""
+        """Get summary of v2 tick activity."""
         # Count ticks by type
         tick_counts = {}
+        stream_ids = set()
         for tick in self.tick_history:
             tick_type = tick["tick_type"]
             tick_counts[tick_type] = tick_counts.get(tick_type, 0) + 1
+            if tick.get("stream_id"):
+                stream_ids.add(tick["stream_id"])
         
         return {
+            "protocol_version": "v2",
             "total_ticks": self._tick_count,
             "tick_types_seen": list(tick_counts.keys()),
             "tick_counts_by_type": tick_counts,
+            "unique_stream_ids": len(stream_ids),
+            "stream_ids_seen": list(stream_ids),
             "uptime_seconds": (datetime.now() - self._start_time).total_seconds(),
             "recent_ticks": len(self.tick_history)
         }
