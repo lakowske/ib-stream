@@ -104,7 +104,7 @@ class StreamConfig:
     """Configuration for stream client."""
     
     base_url: str = "http://localhost:8001"
-    timeout: int = 30
+    timeout: Optional[int] = None
     reconnect_delay: int = 5
     max_reconnect_attempts: int = 10
     heartbeat_interval: int = 30

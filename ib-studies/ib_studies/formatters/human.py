@@ -16,6 +16,9 @@ class HumanFormatter(BaseFormatter):
         self.header_shown = False
         self.last_summary_time = None
         self.summary_interval = 10  # Show summary every 10 seconds
+        # Track last known bid/ask for passthrough
+        self.last_bid = 0.0
+        self.last_ask = 0.0
     
     def format_header(self, contract_id: int, study_name: str, **kwargs) -> str:
         """Format header information."""
@@ -33,8 +36,75 @@ Time         Price    Size     Bid      Ask      Delta    Cumulative
 """
         return header
     
+    def _format_passthrough_as_table(self, data: Dict[str, Any]) -> str:
+        """Format passthrough data using the original table format."""
+        if not self.header_shown and self.show_header:
+            contract_id = data.get('contract_id', 'unknown')
+            study_name = data.get('study', 'passthrough')
+            header = self.format_header(contract_id, study_name)
+            self.header_shown = True
+            result = header
+        else:
+            result = ""
+        
+        # Extract tick data
+        tick_type = data.get('tick_type', 'unknown')
+        tick_data = data.get('data', {})
+        timestamp = data.get('timestamp', '')
+        
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                time_str = dt.strftime('%H:%M:%S')
+            except ValueError:
+                time_str = timestamp[11:19] if len(timestamp) > 19 else timestamp[:8]
+        else:
+            time_str = datetime.now().strftime('%H:%M:%S')
+        
+        # Format based on tick type
+        if tick_type in ['bid_ask', 'BidAsk']:
+            bid_price = tick_data.get('bid_price', 0.0)
+            ask_price = tick_data.get('ask_price', 0.0)
+            bid_size = tick_data.get('bid_size', 0.0)
+            ask_size = tick_data.get('ask_size', 0.0)
+            
+            # Update last known bid/ask
+            if bid_price > 0:
+                self.last_bid = bid_price
+            if ask_price > 0:
+                self.last_ask = ask_price
+            
+            # Use table format: Time, Price (bid), Size (bid_size), Bid, Ask, Delta (0), Cumulative (0)
+            line = f"{time_str:<12} {bid_price:<8.2f} {bid_size:<8.0f} {bid_price:<8.2f} {ask_price:<8.2f} {'0':<8} {'0'}\n"
+            
+        elif tick_type in ['last', 'Last', 'all_last', 'AllLast']:
+            price = tick_data.get('price', 0.0)
+            size = tick_data.get('size', 0.0)
+            
+            # Use table format: Time, Price, Size, Bid (last), Ask (last), Delta (0), Cumulative (0)
+            line = f"{time_str:<12} {price:<8.2f} {size:<8.0f} {self.last_bid:<8.2f} {self.last_ask:<8.2f} {'0':<8} {'0'}\n"
+            
+        elif tick_type in ['time_sales']:
+            # time_sales contains nested trade data
+            price = tick_data.get('price', 0.0)
+            size = tick_data.get('size', 0.0)
+            
+            # Use table format: Time, Price, Size, Bid (last), Ask (last), Delta (0), Cumulative (0)
+            line = f"{time_str:<12} {price:<8.2f} {size:<8.0f} {self.last_bid:<8.2f} {self.last_ask:<8.2f} {'0':<8} {'0'}\n"
+            
+        else:
+            # Generic format for other tick types
+            line = f"{time_str:<12} {'0.00':<8} {'0':<8} {'0.00':<8} {'0.00':<8} {'0':<8} {'0'} # {tick_type}: {tick_data}\n"
+        
+        result += line
+        return result
+    
     def format_update(self, data: Dict[str, Any]) -> str:
         """Format a single trade update."""
+        # Handle passthrough study - use original table format but extract data differently
+        if data.get('study') == 'passthrough':
+            return self._format_passthrough_as_table(data)
+            
         if not self.header_shown and self.show_header:
             contract_id = data.get('contract_id', 'unknown')
             study_name = data.get('study', 'unknown')

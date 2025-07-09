@@ -27,6 +27,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.30.0",
     "ibapi>=10.30.0",
+    "jsonschema>=4.0.0",
 ]
 
 [project.scripts]

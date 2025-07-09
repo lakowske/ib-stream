@@ -23,6 +23,8 @@ class MultiStreamDeltaStudy(BaseStudy):
         self.delta_buffer: List[DeltaPoint] = []
         self.cumulative_delta: float = 0
         self.last_trade_price: Optional[float] = None
+        # Track last known bid/ask for when current_quote is None
+        self.last_known_quote: Optional[MarketQuote] = None
         
         # Track statistics
         self.bid_hits: int = 0
@@ -41,11 +43,11 @@ class MultiStreamDeltaStudy(BaseStudy):
         logger.debug("MultiStreamDeltaStudy.process_tick: tick_type=%s, data=%s", tick_type, data)
         
         try:
-            if tick_type == "BidAsk":
+            if tick_type in ["BidAsk", "bid_ask"]:
                 logger.debug("Processing BidAsk tick from stream")
                 self._process_bid_ask(data)
                 return None  # No output for quote updates
-            elif tick_type in ["Last", "AllLast"]:
+            elif tick_type in ["Last", "AllLast", "last", "all_last", "time_sales"]:
                 logger.debug("Processing trade tick: %s", tick_type)
                 result = self._process_trade(data, tick_type)
                 logger.debug("Trade processing result: %s", result)
@@ -73,6 +75,10 @@ class MultiStreamDeltaStudy(BaseStudy):
                 bid_size=bid_size,
                 ask_size=ask_size
             )
+            
+            # Store as last known quote if it has valid prices
+            if self.current_quote.bid_price > 0 and self.current_quote.ask_price > 0:
+                self.last_known_quote = self.current_quote
             
             logger.debug("Updated quote: bid=%.2f@%.0f, ask=%.2f@%.0f, spread=%.2f", 
                         self.current_quote.bid_price, self.current_quote.bid_size,
@@ -112,8 +118,8 @@ class MultiStreamDeltaStudy(BaseStudy):
             logger.debug("Calculated delta: %.2f, cumulative: %.2f", delta, self.cumulative_delta + delta)
             self.cumulative_delta += delta
             
-            # Create delta point
-            quote = self.current_quote or MarketQuote(
+            # Create delta point (use last known quote if current quote not available)
+            quote = self.current_quote or self.last_known_quote or MarketQuote(
                 timestamp=trade.timestamp,
                 bid_price=0.0,
                 ask_price=0.0,
@@ -303,6 +309,7 @@ class MultiStreamDeltaStudy(BaseStudy):
     def reset(self) -> None:
         """Reset study state."""
         self.current_quote = None
+        self.last_known_quote = None
         self.delta_buffer.clear()
         self.cumulative_delta = 0
         self.last_trade_price = None

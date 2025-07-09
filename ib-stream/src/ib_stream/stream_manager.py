@@ -171,7 +171,7 @@ class StreamManager:
             
             return True
         else:
-            logger.warning("Received tick data for unknown request_id %d", request_id)
+            logger.debug("Received tick data for unknown request_id %d", request_id)
             return False
     
     async def route_error(self, request_id: int, error_code: str, error_message: str) -> bool:

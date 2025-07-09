@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import JSONResponse
 
 from .config import create_config, is_valid_tick_type
@@ -28,6 +28,8 @@ from .sse_response import (
 )
 from .streaming_app import StreamingApp
 from .utils import connect_to_tws
+from .ws_response import websocket_endpoint, websocket_control_endpoint
+from .ws_manager import ws_manager
 
 # Load configuration
 config = create_config()
@@ -85,7 +87,10 @@ async def lifespan(_: FastAPI):
     logger.info("  Client ID: %d", config.client_id)
     logger.info("  Host: %s", config.host)
     logger.info("  Max Streams: %d", config.max_concurrent_streams)
-    logger.info("  Default Timeout: %d seconds", config.default_timeout_seconds)
+    if config.default_timeout_seconds is not None:
+        logger.info("  Default Timeout: %d seconds", config.default_timeout_seconds)
+    else:
+        logger.info("  Default Timeout: No timeout (unlimited)")
 
     logger.info("Attempting to establish TWS connection...")
     try:
@@ -135,7 +140,10 @@ async def root():
             "active": "View /stream/active for currently running streams",
         },
         "endpoints": {
-            "/stream/{contract_id}/{tick_type}": "Stream specific tick type data for a contract",
+            "/stream/{contract_id}/{tick_type}": "Stream specific tick type data for a contract (SSE)",
+            "ws://{host}/ws/stream/{contract_id}/{tick_type}": "WebSocket streaming for specific tick type",
+            "ws://{host}/ws/stream/{contract_id}/multi": "WebSocket multi-stream endpoint",
+            "ws://{host}/ws/control": "WebSocket control channel",
             "/health": "Health check with TWS connection status",
             "/stream/info": "Available tick types and streaming capabilities",
             "/stream/active": "List currently active streams",
@@ -499,6 +507,38 @@ async def stop_contract_streams(contract_id: int):
         "stopped_streams": stopped_streams,
         "timestamp": datetime.now().isoformat()
     }
+
+
+# WebSocket Endpoints
+
+@app.websocket("/ws/stream/{contract_id}/multi")
+async def websocket_multi_stream(websocket: WebSocket, contract_id: int):
+    """WebSocket endpoint for multi-stream subscriptions for a contract."""
+    logger.info("Multi-stream WebSocket endpoint called for contract %d", contract_id)
+    await websocket_endpoint(websocket)
+
+
+@app.websocket("/ws/stream/{contract_id}/{tick_type}")
+async def websocket_single_stream(websocket: WebSocket, contract_id: int, tick_type: str):
+    """WebSocket endpoint for streaming specific tick type data for a contract."""
+    # Validate tick type
+    if not is_valid_tick_type(tick_type):
+        await websocket.close(code=4002, reason=f"Invalid tick type: {tick_type}")
+        return
+    
+    await websocket_endpoint(websocket)
+
+
+@app.websocket("/ws/control")
+async def websocket_control(websocket: WebSocket):
+    """WebSocket control endpoint for management operations."""
+    await websocket_control_endpoint(websocket)
+
+
+@app.get("/ws/stats")
+async def websocket_stats():
+    """Get WebSocket connection statistics."""
+    return ws_manager.get_connection_stats()
 
 
 def main():

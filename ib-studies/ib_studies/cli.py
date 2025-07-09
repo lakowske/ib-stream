@@ -13,6 +13,7 @@ from ib_studies.formatters.human import HumanFormatter
 from ib_studies.formatters.json import JSONFormatter
 from ib_studies.models import StreamConfig, StudyConfig
 from ib_studies.stream_client import StreamClient
+from ib_studies.ws_client import WebSocketMultiStreamClient
 from ib_studies.studies.delta import DeltaStudy
 from ib_studies.studies.passthrough import PassThroughStudy
 from ib_studies.studies.multi_delta import MultiStreamDeltaStudy
@@ -176,11 +177,138 @@ class StudyRunner:
             self.formatter.close()
 
 
+class WebSocketStudyRunner:
+    """Study runner for WebSocket transport."""
+    
+    def __init__(self, study, formatter, stream_config: StreamConfig):
+        """Initialize WebSocket study runner."""
+        self.study = study
+        self.formatter = formatter
+        self.stream_config = stream_config
+        self.ws_client = None
+        self.running = False
+        self._stop_event = asyncio.Event()
+        
+    async def run(self, contract_id: int, tick_types: Optional[List[str]] = None) -> None:
+        """Run the study using WebSocket transport."""
+        self.running = True
+        
+        # Setup signal handlers
+        def signal_handler():
+            logger.info("Received interrupt signal, stopping WebSocket stream...")
+            self._stop_event.set()
+            
+        def emergency_exit(sig, frame):
+            logger.error("Emergency exit - forcing immediate shutdown")
+            sys.exit(1)
+        
+        # Signal handling setup
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGTERM, signal_handler)
+            loop.add_signal_handler(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGQUIT, emergency_exit)
+        else:
+            signal.signal(signal.SIGINT, lambda s, f: signal_handler())
+            signal.signal(signal.SIGTERM, lambda s, f: signal_handler())
+        
+        try:
+            # Create WebSocket client
+            self.ws_client = WebSocketMultiStreamClient(self.stream_config)
+            
+            # Use provided tick types or fall back to study's required types
+            stream_tick_types = tick_types or self.study.required_tick_types
+            
+            # Show header
+            if hasattr(self.formatter, 'format_header'):
+                header = self.formatter.format_header(
+                    contract_id, 
+                    self.study.name,
+                    window_seconds=self.study.config.window_seconds,
+                    timestamp=self.study._start_time.isoformat()
+                )
+                self.formatter.output(header)
+            
+            # Connect and start consumption
+            await self.ws_client.connect_multiple(contract_id, stream_tick_types, self._handle_tick)
+            
+            # Start consumption task
+            consume_task = asyncio.create_task(self.ws_client.consume(self._handle_tick))
+            stop_task = asyncio.create_task(self._stop_event.wait())
+            
+            # Wait for either consumption to complete or stop signal
+            done, pending = await asyncio.wait(
+                [consume_task, stop_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # Cancel pending tasks
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+        except Exception as e:
+            logger.error("Error running WebSocket study: %s", e, exc_info=True)
+            if hasattr(self.formatter, 'format_error'):
+                error_msg = self.formatter.format_error(str(e))
+                self.formatter.output(error_msg)
+        finally:
+            await self.cleanup()
+    
+    async def _handle_tick(self, tick_type: str, data: dict) -> None:
+        """Handle incoming tick data."""
+        if self._stop_event.is_set():
+            return
+        
+        logger.debug("WebSocketStudyRunner._handle_tick: tick_type=%s, data=%s", tick_type, data)
+        
+        try:
+            # Process tick through study
+            result = self.study.process_tick(tick_type, data)
+            logger.debug("Study result: %s", result)
+            
+            # Format and output result
+            if result:
+                logger.debug("Formatting output for result: %s", result)
+                output = self.formatter.format_update(result)
+                self.formatter.output(output)
+            else:
+                logger.debug("No result from study, skipping output")
+                
+        except Exception as e:
+            logger.error("Error processing tick: %s", e, exc_info=True)
+    
+    async def cleanup(self) -> None:
+        """Clean up resources."""
+        self.running = False
+        
+        # Show final summary
+        if hasattr(self.formatter, 'format_final_summary'):
+            summary = self.study.get_summary()
+            final_output = self.formatter.format_final_summary({"summary": summary})
+            self.formatter.output(final_output)
+        
+        # Disconnect WebSocket client
+        if self.ws_client:
+            await self.ws_client.disconnect_all()
+        
+        # Close formatter
+        if hasattr(self.formatter, 'close'):
+            self.formatter.close()
+
+
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 @click.option('--base-url', default='http://localhost:8001', help='IB-Stream base URL')
+@click.option('--transport', type=click.Choice(['sse', 'websocket']), default='sse', 
+              help='Transport protocol (sse or websocket)')
 @click.pass_context
-def cli(ctx, verbose, base_url):
+def cli(ctx, verbose, base_url, transport):
     """IB-Studies: Real-time market data analysis using IB-Stream."""
     ctx.ensure_object(dict)
     
@@ -192,6 +320,7 @@ def cli(ctx, verbose, base_url):
     
     # Store config
     ctx.obj['stream_config'] = StreamConfig(base_url=base_url)
+    ctx.obj['transport'] = transport
 
 
 @cli.command()
@@ -200,7 +329,7 @@ def cli(ctx, verbose, base_url):
 @click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
 @click.option('--output', '-o', type=click.Path(), help='Output file path')
 @click.option('--tick-types', default='BidAsk,Last,AllLast', help='Comma-separated tick types')
-@click.option('--timeout', type=int, default=30, help='Stream timeout in seconds')
+@click.option('--timeout', type=int, help='Stream timeout in seconds (no timeout if not specified)')
 @click.option('--neutral-zone', type=float, default=0.0, help='Neutral zone percentage')
 @click.pass_context
 def delta(ctx, contract, window, output_json, output, tick_types, timeout, neutral_zone):
@@ -217,7 +346,8 @@ def delta(ctx, contract, window, output_json, output, tick_types, timeout, neutr
     
     # Update stream config
     stream_config = ctx.obj['stream_config']
-    stream_config.timeout = timeout
+    if timeout is not None:
+        stream_config.timeout = timeout
     
     # Create study
     study = DeltaStudy(study_config)
@@ -232,8 +362,15 @@ def delta(ctx, contract, window, output_json, output, tick_types, timeout, neutr
     else:
         formatter = HumanFormatter(output_file)
     
-    # Create and run study
-    runner = StudyRunner(study, formatter, stream_config)
+    # Select runner based on transport
+    transport = ctx.obj.get('transport', 'sse')
+    
+    if transport == 'websocket':
+        # Use WebSocket transport
+        runner = WebSocketStudyRunner(study, formatter, stream_config)
+    else:
+        # Use SSE transport (default)
+        runner = StudyRunner(study, formatter, stream_config)
     
     def handle_interrupt(sig, frame):
         logger.info("Interrupt received, forcing exit...")
@@ -260,7 +397,7 @@ def delta(ctx, contract, window, output_json, output, tick_types, timeout, neutr
 @click.option('--window', '-w', type=int, default=60, help='Time window in seconds')
 @click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
 @click.option('--output', '-o', type=click.Path(), help='Output file path')
-@click.option('--timeout', type=int, default=30, help='Stream timeout in seconds')
+@click.option('--timeout', type=int, help='Stream timeout in seconds (no timeout if not specified)')
 @click.option('--neutral-zone', type=float, default=0.0, help='Neutral zone percentage')
 @click.pass_context
 def true_delta(ctx, contract, window, output_json, output, timeout, neutral_zone):
@@ -274,7 +411,8 @@ def true_delta(ctx, contract, window, output_json, output, timeout, neutral_zone
     
     # Update stream config
     stream_config = ctx.obj['stream_config']
-    stream_config.timeout = timeout
+    if timeout is not None:
+        stream_config.timeout = timeout
     
     # Create multi-stream delta study
     study = MultiStreamDeltaStudy(study_config)
@@ -289,8 +427,15 @@ def true_delta(ctx, contract, window, output_json, output, timeout, neutral_zone
     else:
         formatter = HumanFormatter(output_file)
     
-    # Create and run multi-stream study
-    runner = MultiStudyRunner(study, formatter, stream_config)
+    # Select runner based on transport
+    transport = ctx.obj.get('transport', 'sse')
+    
+    if transport == 'websocket':
+        # Use WebSocket transport
+        runner = WebSocketStudyRunner(study, formatter, stream_config)
+    else:
+        # Use SSE transport (default)
+        runner = MultiStudyRunner(study, formatter, stream_config)
     
     def handle_interrupt(sig, frame):
         logger.info("Interrupt received, forcing exit...")
@@ -318,7 +463,7 @@ def true_delta(ctx, contract, window, output_json, output, timeout, neutral_zone
 @click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
 @click.option('--output', '-o', type=click.Path(), help='Output file path')
 @click.option('--tick-types', default='BidAsk,Last,AllLast', help='Comma-separated tick types')
-@click.option('--timeout', type=int, default=30, help='Stream timeout in seconds')
+@click.option('--timeout', type=int, help='Stream timeout in seconds (no timeout if not specified)')
 @click.pass_context
 def passthrough(ctx, contract, output_json, output, tick_types, timeout):
     """Pass-through study to see all incoming tick data."""
@@ -331,7 +476,8 @@ def passthrough(ctx, contract, output_json, output, tick_types, timeout):
     
     # Update stream config
     stream_config = ctx.obj['stream_config']
-    stream_config.timeout = timeout
+    if timeout is not None:
+        stream_config.timeout = timeout
     
     # Create study
     study = PassThroughStudy(study_config)
@@ -346,8 +492,15 @@ def passthrough(ctx, contract, output_json, output, tick_types, timeout):
     else:
         formatter = HumanFormatter(output_file)
     
-    # Create and run study
-    runner = StudyRunner(study, formatter, stream_config)
+    # Select runner based on transport
+    transport = ctx.obj.get('transport', 'sse')
+    
+    if transport == 'websocket':
+        # Use WebSocket transport
+        runner = WebSocketStudyRunner(study, formatter, stream_config)
+    else:
+        # Use SSE transport (default)
+        runner = StudyRunner(study, formatter, stream_config)
     
     try:
         asyncio.run(runner.run(contract, tick_type_list))
