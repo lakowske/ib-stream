@@ -992,69 +992,6 @@ async def stream_contract_v2_single(
     )
 
 
-@app.get("/v2/stream/{contract_id}")
-async def stream_contract_v2_multi(
-    contract_id: int,
-    tick_types: str = Query(..., description="Comma-separated tick types: last,all_last,bid_ask,mid_point"),
-    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
-    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
-):
-    """Stream market data for a contract with multiple tick types via Server-Sent Events (v2 protocol)"""
-    
-    # Parse and validate tick types
-    tick_type_list = [t.strip() for t in tick_types.split(',')]
-    valid_tick_types = ['last', 'all_last', 'bid_ask', 'mid_point']
-    
-    for tick_type in tick_type_list:
-        if tick_type not in valid_tick_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(valid_tick_types)}"
-            )
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    tick_type_list = [t for t in tick_type_list if not (t in seen or seen.add(t))]
-    
-    # Validate limit
-    if limit is not None and (limit < 1 or limit > 10000):
-        raise HTTPException(
-            status_code=400,
-            detail="Limit must be between 1 and 10000"
-        )
-    
-    # Validate timeout
-    if timeout is not None and (timeout < 5 or timeout > 3600):
-        raise HTTPException(
-            status_code=400,
-            detail="Timeout must be between 5 and 3600 seconds"
-        )
-    
-    logger.info("Starting v2 multi-stream for contract %d, types %s, limit %s, timeout %s",
-                contract_id, tick_type_list, limit, timeout)
-    
-    # Create event generator
-    events = stream_contract_data_v2(contract_id, tick_type_list, limit, timeout)
-    
-    # Return SSE response with v2 headers
-    return SSEStreamingResponse(
-        content=async_sse_generator(events),
-        media_type="text/event-stream"
-    )
-
-
-async def async_sse_generator(events: AsyncGenerator[SSEEvent, None]) -> AsyncGenerator[str, None]:
-    """Convert SSE events to formatted strings."""
-    try:
-        async for event in events:
-            yield event.format()
-    except Exception as e:
-        logger.error("Error in SSE generator: %s", e)
-        # Send error event with empty stream_id (connection-level error)
-        error_event = create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
-        yield error_event.format()
-
-
 @app.get("/v2/stream/{contract_id}/with-buffer")
 async def stream_contract_with_buffer(
     contract_id: int,
@@ -1199,6 +1136,69 @@ async def stream_contract_with_buffer_data(
     except Exception as e:
         logger.error("Error in buffer+live stream for contract %d: %s", contract_id, e)
         yield create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
+
+
+@app.get("/v2/stream/{contract_id}")
+async def stream_contract_v2_multi(
+    contract_id: int,
+    tick_types: str = Query(..., description="Comma-separated tick types: last,all_last,bid_ask,mid_point"),
+    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop"),
+    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+):
+    """Stream market data for a contract with multiple tick types via Server-Sent Events (v2 protocol)"""
+    
+    # Parse and validate tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+    valid_tick_types = ['last', 'all_last', 'bid_ask', 'mid_point']
+    
+    for tick_type in tick_type_list:
+        if tick_type not in valid_tick_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(valid_tick_types)}"
+            )
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    tick_type_list = [t for t in tick_type_list if not (t in seen or seen.add(t))]
+    
+    # Validate limit
+    if limit is not None and (limit < 1 or limit > 10000):
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 10000"
+        )
+    
+    # Validate timeout
+    if timeout is not None and (timeout < 5 or timeout > 3600):
+        raise HTTPException(
+            status_code=400,
+            detail="Timeout must be between 5 and 3600 seconds"
+        )
+    
+    logger.info("Starting v2 multi-stream for contract %d, types %s, limit %s, timeout %s",
+                contract_id, tick_type_list, limit, timeout)
+    
+    # Create event generator
+    events = stream_contract_data_v2(contract_id, tick_type_list, limit, timeout)
+    
+    # Return SSE response with v2 headers
+    return SSEStreamingResponse(
+        content=async_sse_generator(events),
+        media_type="text/event-stream"
+    )
+
+
+async def async_sse_generator(events: AsyncGenerator[SSEEvent, None]) -> AsyncGenerator[str, None]:
+    """Convert SSE events to formatted strings."""
+    try:
+        async for event in events:
+            yield event.format()
+    except Exception as e:
+        logger.error("Error in SSE generator: %s", e)
+        # Send error event with empty stream_id (connection-level error)
+        error_event = create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
+        yield error_event.format()
 
 
 @app.get("/v2/info")

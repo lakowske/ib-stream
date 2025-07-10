@@ -1,5 +1,21 @@
 # Project Commands
 
+## ⚠️ CRITICAL WARNING ⚠️
+
+**NEVER use `bd stop-all` without explicit user permission!**
+
+The production server (`ib-stream-tracked` on port 8001) continuously records live market data to disk. Stopping it unexpectedly will:
+- **Lose valuable market data** that cannot be recovered
+- **Break historical data continuity** for analysis and backtesting
+- **Interrupt critical data collection** during market hours
+
+**Always ask the user before stopping production servers!**
+
+Safe commands to check status:
+- `bd status` - Check which servers are running
+- `curl -s http://localhost:8001/health | jq .` - Check production server health
+- `find storage -name "*.pb" -newermt "5 minutes ago" | wc -l` - Verify data is being recorded
+
 ## Quick Start - Start Both Servers
 
 ```bash
