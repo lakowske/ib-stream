@@ -28,6 +28,9 @@ dependencies = [
     "uvicorn>=0.30.0",
     "ibapi>=10.30.0",
     "jsonschema>=4.0.0",
+    "protobuf>=4.0.0",
+    "asyncpg>=0.28.0",
+    "aiofiles>=23.0.0",
 ]
 
 [project.scripts]

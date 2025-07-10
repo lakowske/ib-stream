@@ -1,0 +1,85 @@
+// tick_stream.proto
+syntax = "proto3";
+
+package ib_stream;
+
+import "google/protobuf/timestamp.proto";
+
+// Base message wrapper for all stream messages
+message StreamMessage {
+  string type = 1;                              // "tick", "error", "complete", "info"
+  string stream_id = 2;                         // Unique stream identifier
+  google.protobuf.Timestamp timestamp = 3;     // UTC timestamp
+  oneof message_data {
+    TickData tick_data = 4;
+    ErrorData error_data = 5;
+    CompleteData complete_data = 6;
+    InfoData info_data = 7;
+  }
+  map<string, string> metadata = 8;            // Optional metadata
+}
+
+// Tick data message
+message TickData {
+  uint32 contract_id = 1;
+  string tick_type = 2;                        // "last", "bid_ask", "mid_point", "all_last"
+  
+  // Price fields (conditional based on tick_type)
+  optional double price = 3;                   // For last/all_last
+  optional double size = 4;                    // For last/all_last
+  optional double bid_price = 5;               // For bid_ask
+  optional double bid_size = 6;                // For bid_ask
+  optional double ask_price = 7;               // For bid_ask
+  optional double ask_size = 8;                // For bid_ask
+  optional double mid_price = 9;               // For mid_point
+  
+  // Additional fields
+  optional string exchange = 10;
+  repeated string conditions = 11;
+  optional uint64 sequence = 12;
+  
+  // Tick attributes (from IB API)
+  optional bool past_limit = 13;               // For last/all_last
+  optional bool unreported = 14;               // For last/all_last
+  optional bool bid_past_low = 15;             // For bid_ask
+  optional bool ask_past_high = 16;            // For bid_ask
+}
+
+// Error data message
+message ErrorData {
+  string code = 1;                             // Error code
+  string message = 2;                          // Human-readable message
+  bool recoverable = 3;                        // Whether client can retry
+  map<string, string> details = 4;            // Additional error context
+}
+
+// Stream completion message
+message CompleteData {
+  string reason = 1;                           // "limit_reached", "timeout", etc.
+  uint64 total_ticks = 2;                      // Total ticks in stream
+  double duration_seconds = 3;                 // Stream duration
+  optional uint64 final_sequence = 4;         // Last sequence number
+}
+
+// Stream info/metadata message
+message InfoData {
+  string status = 1;                           // "subscribed", "active", etc.
+  optional ContractInfo contract_info = 2;
+  optional StreamConfig stream_config = 3;
+}
+
+// Contract information
+message ContractInfo {
+  string symbol = 1;
+  string exchange = 2;
+  string currency = 3;
+  string contract_type = 4;                    // "STK", "OPT", "FUT", etc.
+}
+
+// Stream configuration
+message StreamConfig {
+  string tick_type = 1;
+  optional uint32 limit = 2;
+  optional uint32 timeout_seconds = 3;
+  optional bool include_extended = 4;
+}

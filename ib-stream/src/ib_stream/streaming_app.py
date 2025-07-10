@@ -8,6 +8,7 @@ import logging
 import signal
 import sys
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, Optional
 
@@ -111,7 +112,11 @@ class StreamingApp(EWrapper, EClient):
     def _process_tick(self, reqId: int, formatter: TickFormatter):
         """Central method to process any type of tick data with StreamManager routing"""
         
+        # Get tick data as JSON
+        tick_json = formatter.to_json()
+        
         # First try to route through StreamManager for API server mode
+        # Note: Storage is now handled in StreamManager in the async context
         try:
             from .stream_manager import stream_manager
             
@@ -120,16 +125,16 @@ class StreamingApp(EWrapper, EClient):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # Schedule the async routing as a task
-                    asyncio.create_task(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    asyncio.create_task(stream_manager.route_tick_data(reqId, tick_json))
                     return
                 else:
                     # Run the async method
-                    asyncio.run(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    asyncio.run(stream_manager.route_tick_data(reqId, tick_json))
                     return
             except RuntimeError:
                 # No event loop, try to create one
                 try:
-                    asyncio.run(stream_manager.route_tick_data(reqId, formatter.to_json()))
+                    asyncio.run(stream_manager.route_tick_data(reqId, tick_json))
                     return
                 except Exception:
                     # Fall back to legacy mode
@@ -146,11 +151,11 @@ class StreamingApp(EWrapper, EClient):
 
         # Handle callback mode (API server)
         if self.tick_callback:
-            self.tick_callback(formatter.to_json())
+            self.tick_callback(tick_json)
         else:
             # Handle CLI mode
             if self.json_output:
-                print(json.dumps(formatter.to_json()))
+                print(json.dumps(tick_json))
             else:
                 print(formatter.to_console())
 

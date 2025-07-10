@@ -1,6 +1,9 @@
 # Pid files
 pids/
 
+# Market data storage
+ib-stream/storage/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

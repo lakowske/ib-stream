@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import JSONResponse
 
 from .config import create_config, is_valid_tick_type, convert_v2_tick_type_to_tws_api
+from .storage import MultiStorage, create_buffer_query
 # Legacy v1 imports - will need to add these back for v1 endpoints
 # from .sse_response_v1 import (
 #     SSECompleteEvent,
@@ -46,6 +47,8 @@ from .utils import connect_to_tws
 from .ws_response import websocket_endpoint, websocket_control_endpoint
 from .ws_manager import ws_manager
 from .stream_id import generate_stream_id, generate_multi_stream_id
+from .stream_manager import stream_manager
+from .background_stream_manager import BackgroundStreamManager, background_stream_manager
 
 # Load configuration
 config = create_config()
@@ -60,6 +63,12 @@ logger = logging.getLogger(__name__)
 # Global TWS connection
 tws_app: Optional[StreamingApp] = None
 tws_lock = threading.Lock()
+
+# Global storage instance
+storage: Optional[MultiStorage] = None
+
+# Global background stream manager
+background_manager: Optional[BackgroundStreamManager] = None
 
 # Stream management
 active_streams = {}
@@ -107,6 +116,36 @@ async def lifespan(_: FastAPI):
         logger.info("  Default Timeout: %d seconds", config.default_timeout_seconds)
     else:
         logger.info("  Default Timeout: No timeout (unlimited)")
+    
+    # Initialize storage system
+    global storage
+    if config.storage.enable_storage:
+        logger.info("Initializing storage system...")
+        logger.info("  Storage path: %s", config.storage.storage_base_path)
+        logger.info("  JSON enabled: %s", config.storage.enable_json)
+        logger.info("  Protobuf enabled: %s", config.storage.enable_protobuf)
+        logger.info("  PostgreSQL enabled: %s", config.storage.enable_postgres_index)
+        
+        try:
+            storage = MultiStorage(
+                storage_path=config.storage.storage_base_path,
+                enable_json=config.storage.enable_json,
+                enable_protobuf=config.storage.enable_protobuf,
+                enable_metrics=config.storage.enable_metrics
+            )
+            await storage.start()
+            logger.info("Storage system initialized successfully")
+            
+            # Initialize stream_manager with storage
+            stream_manager.storage = storage
+            logger.info("Stream manager configured with storage")
+            
+        except Exception as e:
+            logger.error("Failed to initialize storage system: %s", e)
+            logger.info("Continuing without storage...")
+            storage = None
+    else:
+        logger.info("Storage system disabled")
 
     logger.info("Attempting to establish TWS connection...")
     try:
@@ -115,12 +154,57 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         logger.warning("Failed to establish initial TWS connection: %s", e)
         logger.info("Will attempt to connect on first streaming request")
+    
+    # Initialize background streaming for tracked contracts
+    global background_manager
+    if config.storage.tracked_contracts:
+        logger.info("Initializing background streaming for %d tracked contracts...", 
+                   len(config.storage.tracked_contracts))
+        
+        try:
+            background_manager = BackgroundStreamManager(
+                tracked_contracts=config.storage.tracked_contracts,
+                reconnect_delay=config.storage.background_stream_reconnect_delay
+            )
+            await background_manager.start()
+            logger.info("Background streaming started successfully")
+            
+            # Log tracked contracts
+            for contract in config.storage.tracked_contracts:
+                logger.info("  Tracking contract %d (%s): %s, buffer=%dh", 
+                           contract.contract_id, contract.symbol, 
+                           contract.tick_types, contract.buffer_hours)
+            
+        except Exception as e:
+            logger.error("Failed to start background streaming: %s", e)
+            background_manager = None
+    else:
+        logger.info("No tracked contracts configured - background streaming disabled")
 
     yield
 
     # Shutdown
     logger.info("Shutting down IB Stream API Server...")
     global tws_app
+    
+    # Stop background streaming
+    if background_manager:
+        logger.info("Stopping background streaming...")
+        try:
+            await background_manager.stop()
+            logger.info("Background streaming stopped")
+        except Exception as e:
+            logger.error("Error stopping background streaming: %s", e)
+    
+    # Stop storage system
+    if storage:
+        logger.info("Stopping storage system...")
+        try:
+            await storage.stop()
+            logger.info("Storage system stopped")
+        except Exception as e:
+            logger.error("Error stopping storage system: %s", e)
+    
     if tws_app and tws_app.isConnected():
         # Stop all active streams
         with stream_lock:
@@ -183,11 +267,25 @@ async def health_check():
         with stream_lock:
             active_stream_count = len(active_streams)
 
+        storage_status = None
+        if storage:
+            storage_info = storage.get_storage_info()
+            storage_metrics = storage.get_metrics()
+            storage_status = {
+                "enabled": True,
+                "formats": storage_info.get('enabled_formats', []),
+                "queue_sizes": storage_info.get('queue_sizes', {}),
+                "health": storage_metrics.get('health', {}) if storage_metrics else {}
+            }
+        else:
+            storage_status = {"enabled": False}
+
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "tws_connected": tws_connected,
             "active_streams": active_stream_count,
+            "storage": storage_status,
             "max_streams": config.max_concurrent_streams,
             "client_id": config.client_id,
         }
@@ -200,6 +298,176 @@ async def health_check():
                 "timestamp": datetime.now().isoformat(),
                 "error": str(e),
             },
+        )
+
+
+@app.get("/storage/status")
+async def storage_status():
+    """Storage system status and metrics"""
+    if not storage:
+        return {
+            "enabled": False,
+            "message": "Storage system is disabled"
+        }
+    
+    try:
+        storage_info = storage.get_storage_info()
+        storage_metrics = storage.get_metrics()
+        
+        return {
+            "enabled": True,
+            "timestamp": datetime.now().isoformat(),
+            "info": storage_info,
+            "metrics": storage_metrics,
+            "config": {
+                "storage_path": str(config.storage.storage_base_path),
+                "json_enabled": config.storage.enable_json,
+                "protobuf_enabled": config.storage.enable_protobuf,
+                "postgres_enabled": config.storage.enable_postgres_index,
+                "metrics_enabled": config.storage.enable_metrics
+            }
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "enabled": True,
+                "error": f"Storage system error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+
+@app.get("/background/status")
+async def background_streaming_status():
+    """Background streaming status for tracked contracts"""
+    if not background_manager:
+        return {
+            "enabled": False,
+            "message": "Background streaming is disabled"
+        }
+    
+    try:
+        status = background_manager.get_status()
+        return {
+            "enabled": True,
+            "timestamp": datetime.now().isoformat(),
+            "status": status,
+            "config": {
+                "max_tracked_contracts": config.storage.max_tracked_contracts,
+                "reconnect_delay": config.storage.background_stream_reconnect_delay,
+                "tracked_contracts_count": len(config.storage.tracked_contracts)
+            }
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "enabled": True,
+                "error": f"Background streaming error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+
+@app.get("/v2/buffer/{contract_id}/info")
+async def buffer_info(
+    contract_id: int,
+    tick_types: str = Query(default="bid_ask,last", description="Comma-separated tick types")
+):
+    """Get buffer information for a tracked contract"""
+    
+    # Parse tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+    
+    # Check if contract is tracked
+    if not background_manager or not background_manager.is_contract_tracked(contract_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Contract {contract_id} is not tracked"
+        )
+    
+    # Check if storage is available
+    if not storage:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage system not available"
+        )
+    
+    try:
+        buffer_query = create_buffer_query(config.storage.storage_base_path)
+        
+        # Get buffer information
+        available_duration = buffer_query.get_available_buffer_duration(contract_id, tick_type_list)
+        latest_tick_time = buffer_query.get_latest_tick_time(contract_id, tick_type_list)
+        buffer_stats_1h = await buffer_query.get_buffer_stats(contract_id, tick_type_list, "1h")
+        
+        # Get configured buffer hours from background manager
+        configured_buffer_hours = background_manager.get_contract_buffer_hours(contract_id)
+        
+        return {
+            "contract_id": contract_id,
+            "tick_types": tick_type_list,
+            "tracked": True,
+            "available_duration": str(available_duration) if available_duration else None,
+            "configured_buffer_hours": configured_buffer_hours,
+            "latest_tick_time": latest_tick_time.isoformat() if latest_tick_time else None,
+            "buffer_stats_1h": buffer_stats_1h,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Buffer info error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+
+@app.get("/v2/buffer/{contract_id}/stats")
+async def buffer_stats(
+    contract_id: int,
+    tick_types: str = Query(default="bid_ask,last", description="Comma-separated tick types"),
+    duration: str = Query(default="1h", description="Duration to analyze")
+):
+    """Get detailed buffer statistics for a tracked contract"""
+    
+    # Parse tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+    
+    # Check if contract is tracked
+    if not background_manager or not background_manager.is_contract_tracked(contract_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Contract {contract_id} is not tracked"
+        )
+    
+    # Check if storage is available
+    if not storage:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage system not available"
+        )
+    
+    try:
+        buffer_query = create_buffer_query(config.storage.storage_base_path)
+        stats = await buffer_query.get_buffer_stats(contract_id, tick_type_list, duration)
+        
+        return {
+            "contract_id": contract_id,
+            "statistics": stats,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": f"Buffer stats error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
         )
 
 
@@ -785,6 +1053,152 @@ async def async_sse_generator(events: AsyncGenerator[SSEEvent, None]) -> AsyncGe
         # Send error event with empty stream_id (connection-level error)
         error_event = create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
         yield error_event.format()
+
+
+@app.get("/v2/stream/{contract_id}/with-buffer")
+async def stream_contract_with_buffer(
+    contract_id: int,
+    tick_types: str = Query(default="bid_ask,last", description="Comma-separated tick types"),
+    buffer_duration: str = Query(default="1h", description="Buffer duration (e.g., '1h', '30m', '2h')"),
+    limit: Optional[int] = Query(default=None, description="Number of ticks before auto-stop (excluding buffer)"),
+    timeout: Optional[int] = Query(default=None, description="Stream timeout in seconds")
+):
+    """Stream market data with historical buffer for tracked contracts (v2 protocol)"""
+    
+    # Parse and validate tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+    valid_tick_types = ['last', 'all_last', 'bid_ask', 'mid_point']
+    
+    for tick_type in tick_type_list:
+        if tick_type not in valid_tick_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tick type: {tick_type}. Valid types: {', '.join(valid_tick_types)}"
+            )
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    tick_type_list = [t for t in tick_type_list if not (t in seen or seen.add(t))]
+    
+    # Validate limit
+    if limit is not None and (limit < 1 or limit > 10000):
+        raise HTTPException(
+            status_code=400,
+            detail="Limit must be between 1 and 10000"
+        )
+    
+    # Validate timeout
+    if timeout is not None and (timeout < 5 or timeout > 3600):
+        raise HTTPException(
+            status_code=400,
+            detail="Timeout must be between 5 and 3600 seconds"
+        )
+    
+    # Check if contract is tracked
+    if not background_manager or not background_manager.is_contract_tracked(contract_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Contract {contract_id} is not tracked. Only tracked contracts support buffer streaming."
+        )
+    
+    logger.info("Starting v2 buffer stream for contract %d, types %s, buffer %s, limit %s, timeout %s",
+                contract_id, tick_type_list, buffer_duration, limit, timeout)
+    
+    # Create buffer + live event generator
+    events = stream_contract_with_buffer_data(contract_id, tick_type_list, buffer_duration, limit, timeout)
+    
+    # Return SSE response with v2 headers
+    return SSEStreamingResponse(
+        content=async_sse_generator(events),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Stream-Protocol": "v2",
+            "X-Buffer-Enabled": "true",
+            "X-Buffer-Duration": buffer_duration
+        }
+    )
+
+
+async def stream_contract_with_buffer_data(
+    contract_id: int, 
+    tick_types: list, 
+    buffer_duration: str,
+    limit: Optional[int] = None,
+    timeout: Optional[int] = None
+) -> AsyncGenerator[SSEEvent, None]:
+    """Generate events with historical buffer followed by live stream"""
+    
+    try:
+        # Create buffer query
+        if not storage:
+            raise HTTPException(status_code=503, detail="Storage system not available")
+        
+        buffer_query = create_buffer_query(config.storage.storage_base_path)
+        
+        # Phase 1: Send historical buffer
+        logger.info("Fetching buffer data for contract %d, duration %s", contract_id, buffer_duration)
+        
+        try:
+            buffer_messages = await buffer_query.query_buffer(contract_id, tick_types, buffer_duration)
+            buffer_count = len(buffer_messages)
+            
+            # Send info event about buffer
+            yield create_info_event("", {
+                "status": "buffer_start",
+                "contract_id": contract_id,
+                "tick_types": tick_types,
+                "buffer_duration": buffer_duration,
+                "buffer_message_count": buffer_count
+            })
+            
+            # Send historical messages
+            for i, msg in enumerate(buffer_messages):
+                # Create historical tick event
+                tick_event = create_tick_event("", msg)
+                
+                # Add buffer metadata to indicate historical data
+                tick_event.data["metadata"] = tick_event.data.get("metadata", {})
+                tick_event.data["metadata"]["historical"] = True
+                tick_event.data["metadata"]["buffer_index"] = i
+                tick_event.data["metadata"]["buffer_total"] = buffer_count
+                
+                yield tick_event
+            
+            # Send buffer complete event
+            yield create_info_event("", {
+                "status": "buffer_complete",
+                "contract_id": contract_id,
+                "buffer_message_count": buffer_count
+            })
+            
+        except Exception as e:
+            logger.error("Error fetching buffer data: %s", e)
+            yield create_error_event("", "BUFFER_ERROR", f"Failed to fetch buffer data: {str(e)}")
+            return
+        
+        # Phase 2: Switch to live streaming
+        logger.info("Switching to live stream for contract %d", contract_id)
+        
+        yield create_info_event("", {
+            "status": "live_start",
+            "contract_id": contract_id,
+            "tick_types": tick_types
+        })
+        
+        # Start live stream using existing streaming logic
+        async for event in stream_contract_data_v2(contract_id, tick_types, limit, timeout):
+            # Add live metadata
+            if hasattr(event, 'data') and isinstance(event.data, dict):
+                event.data["metadata"] = event.data.get("metadata", {})
+                event.data["metadata"]["historical"] = False
+            
+            yield event
+            
+    except Exception as e:
+        logger.error("Error in buffer+live stream for contract %d: %s", contract_id, e)
+        yield create_error_event("", "STREAM_ERROR", f"Stream error: {str(e)}")
 
 
 @app.get("/v2/info")

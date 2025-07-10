@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -141,11 +141,12 @@ class StreamHandler:
 class StreamManager:
     """Central manager for routing tick data to correct stream handlers."""
     
-    def __init__(self):
+    def __init__(self, storage_instance=None):
         self.stream_handlers: Dict[int, StreamHandler] = {}
         self.lock = threading.Lock()
+        self.storage = storage_instance
         
-        logger.info("StreamManager initialized")
+        logger.info("StreamManager initialized with storage: %s", "enabled" if storage_instance else "disabled")
     
     def register_stream(self, stream_handler: StreamHandler) -> None:
         """Register a new stream handler."""
@@ -172,6 +173,14 @@ class StreamManager:
             handler = self.stream_handlers.get(request_id)
         
         if handler:
+            # Store tick data if storage is available
+            if self.storage:
+                try:
+                    storage_message = self._create_storage_message(handler, tick_data)
+                    await self.storage.store_message(storage_message)
+                except Exception as e:
+                    logger.error("Failed to store tick data for request %d: %s", request_id, e)
+            
             await handler.process_tick(tick_data)
             
             # If handler completed, remove it
@@ -251,6 +260,38 @@ class StreamManager:
             logger.info("Cleaned up %d inactive streams", len(inactive_ids))
         
         return len(inactive_ids)
+    
+    def _create_storage_message(self, handler: StreamHandler, tick_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a v2 protocol message for storage.
+        
+        Args:
+            handler: StreamHandler instance with stream context
+            tick_data: Formatted tick data
+            
+        Returns:
+            v2 protocol message dictionary
+        """
+        timestamp = datetime.now(timezone.utc)
+        
+        # Use the v2 stream_id if available, otherwise generate one
+        stream_id = handler.stream_id or f"req_{handler.request_id}_{int(timestamp.timestamp())}"
+        
+        # Create v2 protocol message
+        message = {
+            "type": "tick",
+            "stream_id": stream_id,
+            "timestamp": timestamp.isoformat(),
+            "data": tick_data.copy(),
+            "metadata": {
+                "source": "stream_manager",
+                "request_id": str(handler.request_id),
+                "contract_id": str(handler.contract_id),
+                "tick_type": handler.tick_type
+            }
+        }
+        
+        return message
 
 
 # Global stream manager instance
