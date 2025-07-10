@@ -95,15 +95,30 @@ class BackgroundStreamManager:
     
     async def _manage_connection(self) -> None:
         """Manage TWS connection and stream lifecycle"""
+        was_connected = False
+        
         while self.running:
             try:
-                # Ensure TWS connection
-                if not self._is_connected():
-                    await self._establish_connection()
+                is_connected = self._is_connected()
                 
-                # Start streams for tracked contracts
-                if self._is_connected():
+                # Detect disconnection
+                if was_connected and not is_connected:
+                    logger.warning("TWS disconnection detected, clearing active streams")
+                    await self._handle_disconnection()
+                
+                # Ensure TWS connection
+                if not is_connected:
+                    await self._establish_connection()
+                    # After successful connection, force restart all streams
+                    if self._is_connected():
+                        logger.info("TWS reconnected, restarting all tracked streams")
+                        await self._start_tracked_streams()
+                
+                # Start streams for new/missing contracts
+                elif is_connected:
                     await self._start_tracked_streams()
+                
+                was_connected = is_connected
                 
                 # Wait before next check
                 await asyncio.sleep(10)
@@ -148,6 +163,30 @@ class BackgroundStreamManager:
         """Check if TWS connection is active"""
         return self.tws_app is not None and self.tws_app.isConnected() and self.tws_app.connected
     
+    async def _handle_disconnection(self) -> None:
+        """Handle TWS disconnection by cleaning up streams"""
+        try:
+            # Cancel all active tick requests
+            for contract_id, tick_types in self.active_streams.items():
+                for tick_type, request_id in tick_types.items():
+                    try:
+                        if self.tws_app and self.tws_app.isConnected():
+                            self.tws_app.cancelTickByTickData(request_id)
+                    except Exception as e:
+                        logger.debug("Error canceling tick request %d: %s", request_id, e)
+                    
+                    # Unregister from stream manager
+                    stream_manager.unregister_stream(request_id)
+            
+            # Clear all tracking dictionaries
+            self.active_streams.clear()
+            self.stream_handlers.clear()
+            
+            logger.info("Cleared all active streams after disconnection")
+            
+        except Exception as e:
+            logger.error("Error handling disconnection: %s", e)
+    
     async def _establish_connection(self) -> None:
         """Establish TWS connection for background streaming"""
         try:
@@ -184,7 +223,21 @@ class BackgroundStreamManager:
     async def _start_tracked_streams(self) -> None:
         """Start streams for all tracked contracts"""
         for contract_id, contract in self.tracked_contracts.items():
+            # Check if all expected streams are active
+            needs_restart = False
+            
             if contract_id not in self.active_streams:
+                needs_restart = True
+            else:
+                # Verify all tick types are present
+                active_types = set(self.active_streams[contract_id].keys())
+                expected_types = set(contract.tick_types)
+                if active_types != expected_types:
+                    logger.info("Stream mismatch for contract %d: active=%s, expected=%s", 
+                               contract_id, active_types, expected_types)
+                    needs_restart = True
+            
+            if needs_restart:
                 await self._start_contract_streams(contract_id, contract)
     
     async def _start_contract_streams(self, contract_id: int, contract: TrackedContract) -> None:
@@ -198,6 +251,10 @@ class BackgroundStreamManager:
             for tick_type in contract.tick_types:
                 request_id = self._get_next_request_id()
                 
+                # Create consistent stream_id for storage file organization
+                # Format: bg_{contract_id}_{tick_type} (e.g., bg_711280073_bid_ask)
+                stream_id = f"bg_{contract_id}_{tick_type}"
+                
                 # Create stream handler for this background stream
                 handler = StreamHandler(
                     request_id=request_id,
@@ -207,7 +264,8 @@ class BackgroundStreamManager:
                     timeout=None,  # No timeout for background streams
                     tick_callback=None,  # No callback needed - storage is handled by StreamManager
                     error_callback=self._handle_stream_error,
-                    complete_callback=self._handle_stream_complete
+                    complete_callback=self._handle_stream_complete,
+                    stream_id=stream_id  # Set consistent stream_id for file organization
                 )
                 
                 # Register with stream manager
