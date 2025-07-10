@@ -13,9 +13,11 @@ from ib_studies.formatters.json import JSONFormatter
 from ib_studies.models import StreamConfig, StudyConfig
 from ib_studies.multi_study_runner import MultiStudyRunner
 from ib_studies.stream_client import StreamClient
+from ib_studies.studies.bollinger_bands import BollingerBandsStudy
 from ib_studies.studies.delta import DeltaStudy
 from ib_studies.studies.multi_delta import MultiStreamDeltaStudy
 from ib_studies.studies.passthrough import PassThroughStudy
+from ib_studies.studies.vwap import VWAPStudy
 from ib_studies.ws_client import WebSocketMultiStreamClient
 
 # Configure logging to stderr
@@ -560,6 +562,147 @@ def info(ctx, base_url):
             sys.exit(1)
 
     asyncio.run(get_info())
+
+
+@cli.command()
+@click.option('--contract', '-c', type=int, required=True, help='Contract ID to analyze')
+@click.option('--window', '-w', type=int, default=0, help='Time window in seconds (0 for session-based)')
+@click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
+@click.option('--output', '-o', type=click.Path(), help='Output file path')
+@click.option('--tick-types', default='last', help='Comma-separated tick types')
+@click.option('--timeout', type=int, help='Stream timeout in seconds (no timeout if not specified)')
+@click.option('--std-dev', type=float, default=3.0, help='Standard deviation multiplier for bands')
+@click.option('--timezone', help='Display timezone (e.g., "US/Eastern", "UTC", defaults to local)')
+@click.pass_context
+def vwap(ctx, contract, window, output_json, output, tick_types, timeout, std_dev, timezone):
+    """Run VWAP study to analyze volume-weighted average price with volatility bands."""
+
+    # Parse tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+
+    # Create study config
+    study_config = StudyConfig(
+        window_seconds=window,
+        vwap_std_dev_multiplier=std_dev
+    )
+
+    # Update stream config
+    stream_config = ctx.obj['stream_config']
+    if timeout is not None:
+        stream_config.timeout = timeout
+
+    # Create study
+    study = VWAPStudy(study_config)
+
+    # Create formatter
+    output_file = None
+    if output:
+        output_file = open(output, 'w')
+
+    if output_json:
+        formatter = JSONFormatter(output_file, pretty=False)
+    else:
+        formatter = HumanFormatter(output_file, display_timezone=timezone)
+
+    # Select runner based on transport
+    transport = ctx.obj.get('transport', 'sse')
+
+    if transport == 'websocket':
+        # Use WebSocket transport
+        runner = WebSocketStudyRunner(study, formatter, stream_config)
+    else:
+        # Use SSE transport (default)
+        runner = StudyRunner(study, formatter, stream_config)
+
+    def handle_interrupt(sig, frame):
+        logger.info("Interrupt received, forcing exit...")
+        sys.exit(0)
+
+    # Set up emergency signal handler
+    signal.signal(signal.SIGINT, handle_interrupt)
+
+    try:
+        asyncio.run(runner.run(contract, tick_type_list))
+    except KeyboardInterrupt:
+        logger.info("Stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error("Error: %s", e)
+        sys.exit(1)
+    finally:
+        if output_file:
+            output_file.close()
+
+
+@cli.command()
+@click.option('--contract', '-c', type=int, required=True, help='Contract ID to analyze')
+@click.option('--period', '-p', type=int, default=1200, help='Period in seconds (default 20 minutes)')
+@click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
+@click.option('--output', '-o', type=click.Path(), help='Output file path')
+@click.option('--tick-types', default='last', help='Comma-separated tick types')
+@click.option('--timeout', type=int, help='Stream timeout in seconds (no timeout if not specified)')
+@click.option('--std-dev', type=float, default=1.0, help='Standard deviation multiplier for bands')
+@click.option('--timezone', help='Display timezone (e.g., "US/Eastern", "UTC", defaults to local)')
+@click.pass_context
+def bollinger(ctx, contract, period, output_json, output, tick_types, timeout, std_dev, timezone):
+    """Run Bollinger Bands study to analyze price with moving average and volatility bands."""
+
+    # Parse tick types
+    tick_type_list = [t.strip() for t in tick_types.split(',')]
+
+    # Create study config with Bollinger-specific settings
+    study_config = StudyConfig(
+        window_seconds=period,
+        bollinger_period_seconds=period,
+        bollinger_std_dev_multiplier=std_dev
+    )
+
+    # Update stream config
+    stream_config = ctx.obj['stream_config']
+    if timeout is not None:
+        stream_config.timeout = timeout
+
+    # Create study
+    study = BollingerBandsStudy(study_config)
+
+    # Create formatter
+    output_file = None
+    if output:
+        output_file = open(output, 'w')
+
+    if output_json:
+        formatter = JSONFormatter(output_file, pretty=False)
+    else:
+        formatter = HumanFormatter(output_file, display_timezone=timezone)
+
+    # Select runner based on transport
+    transport = ctx.obj.get('transport', 'sse')
+
+    if transport == 'websocket':
+        # Use WebSocket transport
+        runner = WebSocketStudyRunner(study, formatter, stream_config)
+    else:
+        # Use SSE transport (default)
+        runner = StudyRunner(study, formatter, stream_config)
+
+    def handle_interrupt(sig, frame):
+        logger.info("Interrupt received, forcing exit...")
+        sys.exit(0)
+
+    # Set up emergency signal handler
+    signal.signal(signal.SIGINT, handle_interrupt)
+
+    try:
+        asyncio.run(runner.run(contract, tick_type_list))
+    except KeyboardInterrupt:
+        logger.info("Stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error("Error: %s", e)
+        sys.exit(1)
+    finally:
+        if output_file:
+            output_file.close()
 
 
 @cli.command()

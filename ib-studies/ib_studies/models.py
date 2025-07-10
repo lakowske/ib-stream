@@ -99,6 +99,175 @@ class DeltaSummary(BaseModel):
         return (self.total_buy_volume / total) * 100
 
 
+class VWAPPoint(BaseModel):
+    """Represents a single VWAP calculation point."""
+
+    timestamp: datetime
+    trade: Trade
+    vwap: float
+    upper_band: float
+    lower_band: float
+    realized_volatility: float
+    cumulative_volume: float
+
+    @property
+    def band_position(self) -> str:
+        """Determine price position relative to bands."""
+        if self.trade.price > self.upper_band:
+            return "above_upper"
+        elif self.trade.price < self.lower_band:
+            return "below_lower"
+        elif self.trade.price > self.vwap:
+            return "above_vwap"
+        elif self.trade.price < self.vwap:
+            return "below_vwap"
+        else:
+            return "at_vwap"
+
+    @property
+    def distance_from_vwap(self) -> float:
+        """Calculate distance from VWAP."""
+        return self.trade.price - self.vwap
+
+    @property
+    def distance_from_upper_band(self) -> float:
+        """Calculate distance from upper band."""
+        return self.trade.price - self.upper_band
+
+    @property
+    def distance_from_lower_band(self) -> float:
+        """Calculate distance from lower band."""
+        return self.trade.price - self.lower_band
+
+
+class VWAPSummary(BaseModel):
+    """Summary statistics for VWAP analysis."""
+
+    window_seconds: int
+    trade_count: int = 0
+    total_volume: float = 0
+    session_start: datetime
+    vwap: float = 0
+    upper_band: float = 0
+    lower_band: float = 0
+    realized_volatility: float = 0
+    band_touches: dict[str, int] = Field(default_factory=lambda: {"upper": 0, "lower": 0})
+    avg_trade_size: float = 0
+
+    @property
+    def band_width(self) -> float:
+        """Calculate band width."""
+        return self.upper_band - self.lower_band
+
+    @property
+    def band_width_percent(self) -> float:
+        """Calculate band width as percentage of VWAP."""
+        if self.vwap == 0:
+            return 0.0
+        return (self.band_width / self.vwap) * 100
+
+    @property
+    def total_band_touches(self) -> int:
+        """Calculate total band touches."""
+        return self.band_touches["upper"] + self.band_touches["lower"]
+
+
+class BollingerPoint(BaseModel):
+    """Represents a single Bollinger Bands calculation point."""
+
+    timestamp: datetime
+    trade: Trade
+    sma: float
+    upper_band: float
+    lower_band: float
+    std_dev: float
+    data_count: int
+
+    @property
+    def percent_b(self) -> float:
+        """Calculate %B indicator."""
+        if self.upper_band == self.lower_band:
+            return 0.5  # When bands are equal, price is at center
+        return (self.trade.price - self.lower_band) / (self.upper_band - self.lower_band)
+
+    @property
+    def band_position(self) -> str:
+        """Determine price position relative to bands."""
+        if self.trade.price > self.upper_band:
+            return "above_upper"
+        elif self.trade.price < self.lower_band:
+            return "below_lower"
+        elif self.trade.price > self.sma:
+            return "above_sma"
+        elif self.trade.price < self.sma:
+            return "below_sma"
+        else:
+            return "at_sma"
+
+    @property
+    def distance_from_sma(self) -> float:
+        """Calculate distance from SMA."""
+        return self.trade.price - self.sma
+
+    @property
+    def distance_from_upper_band(self) -> float:
+        """Calculate distance from upper band."""
+        return self.trade.price - self.upper_band
+
+    @property
+    def distance_from_lower_band(self) -> float:
+        """Calculate distance from lower band."""
+        return self.trade.price - self.lower_band
+
+    @property
+    def is_squeeze(self) -> bool:
+        """Check if bands are in squeeze (narrow) condition."""
+        if self.sma == 0:
+            return False
+        band_width_percent = ((self.upper_band - self.lower_band) / self.sma) * 100
+        return band_width_percent < 1.0  # Less than 1% is considered squeeze
+
+
+class BollingerSummary(BaseModel):
+    """Summary statistics for Bollinger Bands analysis."""
+
+    period_seconds: int
+    trade_count: int = 0
+    sma: float = 0
+    upper_band: float = 0
+    lower_band: float = 0
+    std_dev: float = 0
+    band_touches: dict[str, int] = Field(default_factory=lambda: {"upper": 0, "lower": 0})
+    mean_reversion_signals: int = 0
+
+    @property
+    def band_width(self) -> float:
+        """Calculate band width."""
+        return self.upper_band - self.lower_band
+
+    @property
+    def band_width_percent(self) -> float:
+        """Calculate band width as percentage of SMA."""
+        if self.sma == 0:
+            return 0.0
+        return (self.band_width / self.sma) * 100
+
+    @property
+    def total_band_touches(self) -> int:
+        """Calculate total band touches."""
+        return self.band_touches["upper"] + self.band_touches["lower"]
+
+    @property
+    def volatility_regime(self) -> str:
+        """Determine volatility regime based on band width."""
+        if self.band_width_percent < 1.0:
+            return "low"
+        elif self.band_width_percent > 3.0:
+            return "high"
+        else:
+            return "normal"
+
+
 @dataclass
 class StreamConfig:
     """Configuration for stream client."""
@@ -124,6 +293,16 @@ class StudyConfig:
 
     # Delta-specific config
     neutral_zone_percent: float = 0.0  # Percentage of spread for neutral zone
+
+    # VWAP-specific config
+    vwap_std_dev_multiplier: float = 3.0  # Standard deviation multiplier for VWAP bands
+    vwap_min_trades: int = 2  # Minimum trades for volatility calculation
+    vwap_annualization_factor: float = 252.0  # Trading days per year
+
+    # Bollinger Bands-specific config
+    bollinger_std_dev_multiplier: float = 1.0  # Standard deviation multiplier for bands
+    bollinger_min_trades: int = 10  # Minimum trades for calculation
+    bollinger_period_seconds: int = 1200  # Default 20 minutes
 
 
 # V2 Protocol Message Models
