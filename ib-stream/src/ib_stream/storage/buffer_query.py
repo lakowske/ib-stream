@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple, AsyncIterator
 from pathlib import Path
 
 from .json_storage import JSONStorage
+from .protobuf_storage import ProtobufStorage
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,14 @@ class BufferQuery:
     def __init__(self, storage_path: Path):
         self.storage_path = storage_path
         self.json_storage = JSONStorage(storage_path / "json")
+        self.protobuf_storage = ProtobufStorage(storage_path / "protobuf")
     
     async def query_buffer(
         self, 
         contract_id: int, 
         tick_types: List[str], 
-        buffer_duration: str = "1h"
+        buffer_duration: str = "1h",
+        storage_type: str = "json"
     ) -> List[Dict]:
         """
         Query recent buffer data for a contract.
@@ -35,6 +38,7 @@ class BufferQuery:
             contract_id: Contract ID to query
             tick_types: List of tick types to include
             buffer_duration: Duration string (e.g., "1h", "30m", "2h")
+            storage_type: Storage type to query ("json", "protobuf", or "both")
             
         Returns:
             List of tick messages sorted by timestamp
@@ -42,18 +46,19 @@ class BufferQuery:
         end_time = datetime.now(timezone.utc)
         start_time = end_time - self._parse_duration(buffer_duration)
         
-        return await self.json_storage.query_range(
+        return await self.query_buffer_since(
             contract_id=contract_id,
             tick_types=tick_types,
-            start_time=start_time,
-            end_time=end_time
+            since_time=start_time,
+            storage_type=storage_type
         )
     
     async def query_buffer_since(
         self,
         contract_id: int,
         tick_types: List[str],
-        since_time: datetime
+        since_time: datetime,
+        storage_type: str = "json"
     ) -> List[Dict]:
         """
         Query buffer data since a specific time.
@@ -62,24 +67,55 @@ class BufferQuery:
             contract_id: Contract ID to query
             tick_types: List of tick types to include  
             since_time: Start time for query
+            storage_type: Storage type to query ("json", "protobuf", or "both")
             
         Returns:
             List of tick messages sorted by timestamp
         """
         end_time = datetime.now(timezone.utc)
         
-        return await self.json_storage.query_range(
-            contract_id=contract_id,
-            tick_types=tick_types,
-            start_time=since_time,
-            end_time=end_time
-        )
+        if storage_type == "json":
+            return await self.json_storage.query_range(
+                contract_id=contract_id,
+                tick_types=tick_types,
+                start_time=since_time,
+                end_time=end_time
+            )
+        elif storage_type == "protobuf":
+            return await self.protobuf_storage.query_range(
+                contract_id=contract_id,
+                tick_types=tick_types,
+                start_time=since_time,
+                end_time=end_time
+            )
+        elif storage_type == "both":
+            # Query both storage types and combine results
+            json_results = await self.json_storage.query_range(
+                contract_id=contract_id,
+                tick_types=tick_types,
+                start_time=since_time,
+                end_time=end_time
+            )
+            protobuf_results = await self.protobuf_storage.query_range(
+                contract_id=contract_id,
+                tick_types=tick_types,
+                start_time=since_time,
+                end_time=end_time
+            )
+            
+            # Combine and sort results
+            combined_results = json_results + protobuf_results
+            combined_results.sort(key=lambda m: m.get('timestamp', ''))
+            return combined_results
+        else:
+            raise ValueError(f"Invalid storage_type: {storage_type}. Must be 'json', 'protobuf', or 'both'")
     
     async def query_session_buffer(
         self,
         contract_id: int,
         tick_types: List[str],
-        session_start: Optional[datetime] = None
+        session_start: Optional[datetime] = None,
+        storage_type: str = "json"
     ) -> List[Dict]:
         """
         Query buffer data since session start.
@@ -88,6 +124,7 @@ class BufferQuery:
             contract_id: Contract ID to query
             tick_types: List of tick types to include
             session_start: Session start time (defaults to market open estimation)
+            storage_type: Storage type to query ("json", "protobuf", or "both")
             
         Returns:
             List of tick messages sorted by timestamp
@@ -110,7 +147,7 @@ class BufferQuery:
                 if session_start > now:
                     session_start -= timedelta(days=1)
         
-        return await self.query_buffer_since(contract_id, tick_types, session_start)
+        return await self.query_buffer_since(contract_id, tick_types, session_start, storage_type)
     
     def get_available_buffer_duration(
         self,
@@ -161,10 +198,16 @@ class BufferQuery:
             contract_id: Contract ID to check
             
         Returns:
-            True if contract has stored data
+            True if contract has stored data in JSON or protobuf storage
         """
-        files = self._find_contract_files(contract_id, ["bid_ask", "last", "all_last", "mid_point"])
-        return len(files) > 0
+        # Check JSON files
+        json_files = self._find_contract_files(contract_id, ["bid_ask", "last", "all_last", "mid_point"])
+        if len(json_files) > 0:
+            return True
+        
+        # Check protobuf files
+        protobuf_files = self._find_contract_files_protobuf(contract_id, ["bid_ask", "last", "all_last", "mid_point"])
+        return len(protobuf_files) > 0
     
     def get_latest_tick_time(
         self,
@@ -209,7 +252,8 @@ class BufferQuery:
         self,
         contract_id: int,
         tick_types: List[str],
-        buffer_duration: str = "1h"
+        buffer_duration: str = "1h",
+        storage_type: str = "json"
     ) -> Dict:
         """
         Get statistics about available buffer data.
@@ -218,11 +262,12 @@ class BufferQuery:
             contract_id: Contract ID to analyze
             tick_types: List of tick types to include
             buffer_duration: Duration to analyze
+            storage_type: Storage type to query ("json", "protobuf", or "both")
             
         Returns:
             Dictionary with buffer statistics
         """
-        messages = await self.query_buffer(contract_id, tick_types, buffer_duration)
+        messages = await self.query_buffer(contract_id, tick_types, buffer_duration, storage_type)
         
         if not messages:
             return {
@@ -239,8 +284,8 @@ class BufferQuery:
         latest_time = None
         
         for msg in messages:
-            # Count by tick type
-            tick_type = msg.get('data', {}).get('tick_type', 'unknown')
+            # Count by tick type (check metadata first for background streams, then data)
+            tick_type = msg.get('metadata', {}).get('tick_type') or msg.get('data', {}).get('tick_type', 'unknown')
             tick_type_counts[tick_type] = tick_type_counts.get(tick_type, 0) + 1
             
             # Track time range
@@ -351,15 +396,70 @@ class BufferQuery:
                         continue
                     
                     # Parse filename: contractid_ticktype_timestamp_random.jsonl
+                    # or bg_contractid_ticktype.jsonl (for background streams)
                     parts = file_path.stem.split('_')
                     if len(parts) >= 2:
                         try:
-                            file_contract_id = int(parts[0])
-                            file_tick_type = parts[1]
+                            # Handle background stream format: bg_contractid_ticktype
+                            if parts[0] == 'bg' and len(parts) >= 3:
+                                file_contract_id = int(parts[1])
+                                file_tick_type = parts[2]
+                            # Handle regular format: contractid_ticktype_...
+                            else:
+                                file_contract_id = int(parts[0])
+                                file_tick_type = parts[1]
                             
                             if (file_contract_id == contract_id and 
                                 file_tick_type in tick_types):
                                 files.append(file_path)
+                        except ValueError:
+                            continue
+        
+        return files
+    
+    def _find_contract_files_protobuf(self, contract_id: int, tick_types: List[str]) -> List[Path]:
+        """Find all protobuf files for a contract and tick types"""
+        files = []
+        
+        # Search for files in the protobuf storage directory structure
+        # Format: storage/protobuf/YYYY/MM/DD/HH/bg_contractid_ticktype.pb
+        protobuf_path = self.storage_path / "protobuf"
+        
+        if not protobuf_path.exists():
+            return files
+        
+        # Search through date directories for recent files
+        # For efficiency, only check last few days
+        now = datetime.now(timezone.utc)
+        for days_back in range(7):  # Check last 7 days
+            date = now - timedelta(days=days_back)
+            date_path = protobuf_path / date.strftime("%Y/%m/%d")
+            
+            if not date_path.exists():
+                continue
+            
+            # Check all hours in this date
+            for hour_dir in date_path.iterdir():
+                if not hour_dir.is_dir():
+                    continue
+                
+                # Look for files matching contract and tick types
+                for file_path in hour_dir.iterdir():
+                    if not file_path.is_file() or not file_path.name.endswith('.pb'):
+                        continue
+                    
+                    # Parse filename: bg_contractid_ticktype.pb
+                    parts = file_path.stem.split('_')
+                    if len(parts) >= 3:
+                        try:
+                            # Handle background stream format: bg_contractid_ticktype
+                            if parts[0] == 'bg':
+                                file_contract_id = int(parts[1])
+                                file_tick_type = parts[2]
+                                
+                                if (file_contract_id == contract_id and 
+                                    file_tick_type in tick_types):
+                                    files.append(file_path)
                         except ValueError:
                             continue
         

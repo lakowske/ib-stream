@@ -255,13 +255,28 @@ class JSONStorage:
         if message.get('type') != 'tick':
             return False
             
-        # Check contract_id in tick data
+        # Check contract_id in metadata (background streams) or data (client streams)
         data = message.get('data', {})
-        if data.get('contract_id') != contract_id:
+        metadata = message.get('metadata', {})
+        
+        # Try metadata first (background streams store contract_id as string)
+        msg_contract_id = metadata.get('contract_id')
+        if msg_contract_id is not None:
+            # Convert to int if it's a string
+            try:
+                msg_contract_id = int(msg_contract_id)
+            except (ValueError, TypeError):
+                pass
+        else:
+            # Fall back to data section (client streams)
+            msg_contract_id = data.get('contract_id')
+            
+        if msg_contract_id != contract_id:
             return False
             
-        # Check tick_type
-        if tick_types and data.get('tick_type') not in tick_types:
+        # Check tick_type in metadata (background streams) or data (client streams)
+        msg_tick_type = metadata.get('tick_type') or data.get('tick_type')
+        if tick_types and msg_tick_type not in tick_types:
             return False
             
         return True

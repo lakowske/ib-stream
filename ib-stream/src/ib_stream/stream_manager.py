@@ -141,12 +141,15 @@ class StreamHandler:
 class StreamManager:
     """Central manager for routing tick data to correct stream handlers."""
     
-    def __init__(self, storage_instance=None):
+    def __init__(self, storage_instance=None, enable_client_stream_storage=True):
         self.stream_handlers: Dict[int, StreamHandler] = {}
         self.lock = threading.Lock()
         self.storage = storage_instance
+        self.enable_client_stream_storage = enable_client_stream_storage
         
-        logger.info("StreamManager initialized with storage: %s", "enabled" if storage_instance else "disabled")
+        logger.info("StreamManager initialized with storage: %s, client storage: %s", 
+                   "enabled" if storage_instance else "disabled",
+                   "enabled" if enable_client_stream_storage else "disabled")
     
     def register_stream(self, stream_handler: StreamHandler) -> None:
         """Register a new stream handler."""
@@ -173,13 +176,15 @@ class StreamManager:
             handler = self.stream_handlers.get(request_id)
         
         if handler:
-            # Store tick data if storage is available
+            # Store tick data if storage is available and conditions are met
             if self.storage:
-                try:
-                    storage_message = self._create_storage_message(handler, tick_data)
-                    await self.storage.store_message(storage_message)
-                except Exception as e:
-                    logger.error("Failed to store tick data for request %d: %s", request_id, e)
+                should_store = self._should_store_tick_data(request_id)
+                if should_store:
+                    try:
+                        storage_message = self._create_storage_message(handler, tick_data)
+                        await self.storage.store_message(storage_message)
+                    except Exception as e:
+                        logger.error("Failed to store tick data for request %d: %s", request_id, e)
             
             await handler.process_tick(tick_data)
             
@@ -260,6 +265,23 @@ class StreamManager:
             logger.info("Cleaned up %d inactive streams", len(inactive_ids))
         
         return len(inactive_ids)
+    
+    def _should_store_tick_data(self, request_id: int) -> bool:
+        """
+        Determine if tick data should be stored based on stream type and configuration.
+        
+        Args:
+            request_id: The request ID for the stream
+            
+        Returns:
+            True if the tick data should be stored
+        """
+        # Background streams always store (they use request IDs >= 60000)
+        if request_id >= 60000:
+            return True
+            
+        # Client streams only store if enabled
+        return self.enable_client_stream_storage
     
     def _create_storage_message(self, handler: StreamHandler, tick_data: Dict[str, Any]) -> Dict[str, Any]:
         """

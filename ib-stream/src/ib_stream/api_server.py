@@ -136,9 +136,11 @@ async def lifespan(_: FastAPI):
             await storage.start()
             logger.info("Storage system initialized successfully")
             
-            # Initialize stream_manager with storage
+            # Initialize stream_manager with storage and client stream storage config
             stream_manager.storage = storage
-            logger.info("Stream manager configured with storage")
+            stream_manager.enable_client_stream_storage = config.storage.enable_client_stream_storage
+            logger.info("Stream manager configured with storage, client stream storage: %s", 
+                       "enabled" if config.storage.enable_client_stream_storage else "disabled")
             
         except Exception as e:
             logger.error("Failed to initialize storage system: %s", e)
@@ -146,6 +148,8 @@ async def lifespan(_: FastAPI):
             storage = None
     else:
         logger.info("Storage system disabled")
+        # Still configure stream_manager with client stream storage setting
+        stream_manager.enable_client_stream_storage = config.storage.enable_client_stream_storage
 
     logger.info("Attempting to establish TWS connection...")
     try:
@@ -375,17 +379,10 @@ async def buffer_info(
     contract_id: int,
     tick_types: str = Query(default="bid_ask,last", description="Comma-separated tick types")
 ):
-    """Get buffer information for a tracked contract"""
+    """Get buffer information for a contract with stored data"""
     
     # Parse tick types
     tick_type_list = [t.strip() for t in tick_types.split(',')]
-    
-    # Check if contract is tracked
-    if not background_manager or not background_manager.is_contract_tracked(contract_id):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Contract {contract_id} is not tracked"
-        )
     
     # Check if storage is available
     if not storage:
@@ -397,13 +394,22 @@ async def buffer_info(
     try:
         buffer_query = create_buffer_query(config.storage.storage_base_path)
         
+        # Check if contract has stored data
+        if not buffer_query.is_contract_tracked(contract_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Contract {contract_id} has no stored data"
+            )
+        
         # Get buffer information
         available_duration = buffer_query.get_available_buffer_duration(contract_id, tick_type_list)
         latest_tick_time = buffer_query.get_latest_tick_time(contract_id, tick_type_list)
         buffer_stats_1h = await buffer_query.get_buffer_stats(contract_id, tick_type_list, "1h")
         
-        # Get configured buffer hours from background manager
-        configured_buffer_hours = background_manager.get_contract_buffer_hours(contract_id)
+        # Get configured buffer hours from background manager (if available)
+        configured_buffer_hours = None
+        if background_manager and background_manager.is_contract_tracked(contract_id):
+            configured_buffer_hours = background_manager.get_contract_buffer_hours(contract_id)
         
         return {
             "contract_id": contract_id,
@@ -430,19 +436,13 @@ async def buffer_info(
 async def buffer_stats(
     contract_id: int,
     tick_types: str = Query(default="bid_ask,last", description="Comma-separated tick types"),
-    duration: str = Query(default="1h", description="Duration to analyze")
+    duration: str = Query(default="1h", description="Duration to analyze"),
+    storage_type: str = Query(default="json", description="Storage type: json, protobuf, or both")
 ):
-    """Get detailed buffer statistics for a tracked contract"""
+    """Get detailed buffer statistics for a contract with stored data"""
     
     # Parse tick types
     tick_type_list = [t.strip() for t in tick_types.split(',')]
-    
-    # Check if contract is tracked
-    if not background_manager or not background_manager.is_contract_tracked(contract_id):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Contract {contract_id} is not tracked"
-        )
     
     # Check if storage is available
     if not storage:
@@ -453,7 +453,15 @@ async def buffer_stats(
     
     try:
         buffer_query = create_buffer_query(config.storage.storage_base_path)
-        stats = await buffer_query.get_buffer_stats(contract_id, tick_type_list, duration)
+        
+        # Check if contract has stored data
+        if not buffer_query.is_contract_tracked(contract_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Contract {contract_id} has no stored data"
+            )
+        
+        stats = await buffer_query.get_buffer_stats(contract_id, tick_type_list, duration, storage_type)
         
         return {
             "contract_id": contract_id,
@@ -1031,11 +1039,18 @@ async def stream_contract_with_buffer(
             detail="Timeout must be between 5 and 3600 seconds"
         )
     
-    # Check if contract is tracked
-    if not background_manager or not background_manager.is_contract_tracked(contract_id):
+    # Check if contract has stored data
+    if not storage:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage system not available"
+        )
+    
+    buffer_query = create_buffer_query(config.storage.storage_base_path)
+    if not buffer_query.is_contract_tracked(contract_id):
         raise HTTPException(
             status_code=404,
-            detail=f"Contract {contract_id} is not tracked. Only tracked contracts support buffer streaming."
+            detail=f"Contract {contract_id} has no stored data. Only contracts with stored data support buffer streaming."
         )
     
     logger.info("Starting v2 buffer stream for contract %d, types %s, buffer %s, limit %s, timeout %s",

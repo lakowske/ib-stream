@@ -45,6 +45,10 @@ class StorageConfig:
     enable_protobuf: bool = True
     enable_postgres_index: bool = True
     
+    # Control whether client-requested streams are stored to disk
+    # Background streams always store regardless of this setting
+    enable_client_stream_storage: bool = True
+    
     # Storage paths
     storage_base_path: Path = Path("storage")
     json_storage_path: Optional[Path] = None
@@ -134,6 +138,7 @@ def load_storage_config_from_env() -> StorageConfig:
     config.enable_json = os.getenv("IB_STREAM_ENABLE_JSON", "true").lower() == "true"
     config.enable_protobuf = os.getenv("IB_STREAM_ENABLE_PROTOBUF", "true").lower() == "true"
     config.enable_postgres_index = os.getenv("IB_STREAM_ENABLE_POSTGRES", "true").lower() == "true"
+    config.enable_client_stream_storage = os.getenv("IB_STREAM_ENABLE_CLIENT_STREAM_STORAGE", "true").lower() == "true"
     
     # Storage paths
     storage_base = os.getenv("IB_STREAM_STORAGE_PATH")
