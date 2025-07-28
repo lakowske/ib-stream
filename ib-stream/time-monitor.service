@@ -1,0 +1,26 @@
+[Unit]
+Description=IB Stream Time Drift Monitor
+After=network.target ntpsec.service
+Wants=ntpsec.service
+
+[Service]
+Type=simple
+User=seth
+WorkingDirectory=/home/seth/Software/dev/ib-storage-query/ib-stream
+ExecStart=/usr/bin/python3 scripts/time_monitor.py --monitor --interval 300
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=time-monitor
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/seth/Software/dev/ib-storage-query/ib-stream/logs
+
+[Install]
+WantedBy=multi-user.target

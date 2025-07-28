@@ -146,4 +146,124 @@ def setup_health_endpoints(app, config):
                 }
             )
     
+    @router.get("/time/status")
+    async def time_status():
+        """Check system time drift and synchronization status"""
+        import subprocess
+        import socket
+        import struct
+        from datetime import datetime, timezone
+        
+        async def get_ntp_time(server: str = 'pool.ntp.org') -> dict:
+            try:
+                client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                client.settimeout(2)
+                
+                # NTP packet format
+                packet = b'\x1b' + 47 * b'\0'
+                client.sendto(packet, (server, 123))
+                data, _ = client.recvfrom(1024)
+                client.close()
+                
+                # Extract timestamp
+                unpacked = struct.unpack('!12I', data)
+                timestamp = unpacked[10] + unpacked[11] / 2**32
+                unix_timestamp = timestamp - 2208988800
+                
+                ntp_time = datetime.fromtimestamp(unix_timestamp, timezone.utc)
+                system_time = datetime.now(timezone.utc)
+                drift = (system_time - ntp_time).total_seconds()
+                
+                return {
+                    "server": server,
+                    "ntp_time": ntp_time.isoformat(),
+                    "system_time": system_time.isoformat(),
+                    "drift_seconds": round(drift, 3),
+                    "status": "success"
+                }
+            except Exception as e:
+                return {
+                    "server": server,
+                    "error": str(e),
+                    "status": "error"
+                }
+        
+        # Get NTP status
+        ntp_status = await get_ntp_time()
+        
+        # Get system time sync status
+        try:
+            timedatectl_result = subprocess.run(
+                ['timedatectl', 'status'], 
+                capture_output=True, 
+                text=True, 
+                timeout=5
+            )
+            sync_status = "synchronized" in timedatectl_result.stdout
+        except:
+            sync_status = False
+        
+        # Get NTP peer info
+        try:
+            ntpq_result = subprocess.run(
+                ['ntpq', '-p'], 
+                capture_output=True, 
+                text=True, 
+                timeout=5
+            )
+            ntpq_output = ntpq_result.stdout
+        except:
+            ntpq_output = "NTP query failed"
+        
+        # Determine overall status
+        drift = abs(ntp_status.get('drift_seconds', 999))
+        if drift > 30:
+            overall_status = "critical"
+        elif drift > 5:
+            overall_status = "warning"  
+        elif drift > 1:
+            overall_status = "caution"
+        else:
+            overall_status = "good"
+        
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "overall_status": overall_status,
+            "system_sync": sync_status,
+            "ntp_check": ntp_status,
+            "ntpq_peers": ntpq_output,
+            "message": f"Time drift: {drift:.3f}s ({overall_status})"
+        }
+    
+    @router.get("/time/drift/history")
+    async def time_drift_history(limit: int = 100):
+        """Get recent time drift history from monitoring logs"""
+        import json
+        from pathlib import Path
+        
+        log_file = Path("logs/time_drift_data.jsonl")
+        if not log_file.exists():
+            return {
+                "message": "No time drift history available",
+                "entries": []
+            }
+        
+        try:
+            entries = []
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+                # Get last N lines
+                for line in lines[-limit:]:
+                    entries.append(json.loads(line.strip()))
+            
+            return {
+                "message": f"Retrieved {len(entries)} time drift entries",
+                "entries": entries
+            }
+        except Exception as e:
+            return {
+                "error": f"Failed to read time drift history: {e}",
+                "entries": []
+            }
+    
     app.include_router(router)

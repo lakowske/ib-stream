@@ -152,6 +152,112 @@ class JSONStorage:
         messages.sort(key=lambda m: m.get('timestamp', ''))
         
         return messages
+    
+    async def query_range_stream(
+        self,
+        contract_id: int,
+        tick_types: List[str],
+        start_time: datetime,
+        end_time: Optional[datetime] = None
+    ):
+        """
+        Stream messages from JSON storage within time range without loading all into memory.
+        
+        Args:
+            contract_id: Contract ID to filter
+            tick_types: List of tick types to include
+            start_time: Start of time range
+            end_time: End of time range (None for present)
+            
+        Yields:
+            Individual messages in the time range
+        """
+        if end_time is None:
+            end_time = datetime.now(timezone.utc)
+            
+        # Find all potential files in the time range
+        file_paths = self._get_files_in_range(start_time, end_time)
+        
+        # Sort files by time to ensure chronological order
+        file_paths.sort()
+        
+        message_count = 0
+        first_timestamp = None
+        last_timestamp = None
+        
+        for file_path in file_paths:
+            if file_path.exists():
+                async for message in self._stream_file_range(
+                    file_path, contract_id, tick_types, start_time, end_time
+                ):
+                    message_count += 1
+                    
+                    # Track time range
+                    msg_timestamp = message.get('timestamp')
+                    if msg_timestamp:
+                        if first_timestamp is None:
+                            first_timestamp = msg_timestamp
+                        last_timestamp = msg_timestamp
+                    
+                    yield message
+        
+        # Yield summary as final message
+        yield {
+            "_summary": True,
+            "message_count": message_count,
+            "actual_range": {
+                "start_time": first_timestamp,
+                "end_time": last_timestamp
+            }
+        }
+    
+    async def _stream_file_range(
+        self,
+        file_path: Path,
+        contract_id: int,
+        tick_types: List[str],
+        start_time: datetime,
+        end_time: datetime
+    ):
+        """
+        Stream messages from a single file within the time range.
+        
+        Args:
+            file_path: Path to JSON file
+            contract_id: Contract ID to filter
+            tick_types: List of tick types to include
+            start_time: Start of time range
+            end_time: End of time range
+            
+        Yields:
+            Individual messages from the file
+        """
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                async for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                        
+                    try:
+                        message = json.loads(line)
+                        
+                        # Filter by contract_id and tick_type
+                        if self._message_matches_filter(message, contract_id, tick_types):
+                            # Check timestamp range
+                            msg_time = datetime.fromisoformat(
+                                message['timestamp'].replace('Z', '+00:00')
+                            )
+                            
+                            if start_time <= msg_time <= end_time:
+                                yield message
+                                
+                    except (json.JSONDecodeError, KeyError, ValueError) as e:
+                        logger.warning(f"Skipping invalid JSON line in {file_path}: {e}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"Failed to read file {file_path}: {e}")
         
     def _get_files_in_range(self, start_time: datetime, end_time: datetime) -> List[Path]:
         """
