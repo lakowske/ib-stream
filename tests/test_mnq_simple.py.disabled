@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""
+Simple MNQ BDD test - minimal working example.
+Tests MNQ contract lookup and streaming without complex pytest-bdd scenario loading.
+"""
+
+import logging
+import sys
+from pathlib import Path
+
+import pytest
+from pytest_bdd import scenario
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Add tests directory to path for imports
+tests_dir = Path(__file__).parent
+sys.path.insert(0, str(tests_dir))
+
+# Import step definitions to register them
+from step_definitions import mnq_steps
+
+# Define scenarios using pytest-bdd
+@scenario('features/mnq_streaming.feature', 'Lookup MNQ front month contract')
+def test_mnq_contract_lookup():
+    """Test MNQ contract lookup scenario"""
+    pass
+
+@scenario('features/mnq_streaming.feature', 'Stream MNQ market data')  
+def test_mnq_streaming():
+    """Test MNQ streaming scenario"""
+    pass
+
+def run_mnq_tests():
+    """Run MNQ tests directly"""
+    logger.info("=" * 60)
+    logger.info("RUNNING MNQ BDD TESTS")
+    logger.info("=" * 60)
+    
+    # Run pytest on this file
+    exit_code = pytest.main([__file__, "-v", "-s", "--tb=short"])
+    
+    logger.info("=" * 60)
+    logger.info("MNQ BDD TESTS COMPLETED")
+    logger.info("=" * 60)
+    
+    return exit_code
+
+if __name__ == "__main__":
+    exit_code = run_mnq_tests()
+    sys.exit(exit_code)
