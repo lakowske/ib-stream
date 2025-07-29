@@ -1,5 +1,6 @@
 # Pid files
 pids/
+*.pid
 
 # Market data storage
 ib-stream/storage/

@@ -71,17 +71,9 @@ class IBConnection(EWrapper, EClient):
         logger.info("Connection closed")
         
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = ""):
-        """Handle API errors"""
-        # Some error codes are just informational
-        if errorCode in [2104, 2106, 2158]:  # Market data farm connections
-            logger.debug(f"Info {errorCode}: {errorString}")
-        elif errorCode in [502, 504]:  # Connection errors
-            logger.error(f"Connection error {errorCode}: {errorString}")
-        else:
-            logger.warning(f"API error {errorCode}: {errorString}")
-            
-        if self.on_error:
-            self.on_error(reqId, errorCode, errorString)
+        """Handle API errors using standardized error handling"""
+        from .error_handler import handle_tws_error
+        handle_tws_error(reqId, errorCode, errorString, logger, self.on_error)
     
     def connect_and_start(self) -> bool:
         """

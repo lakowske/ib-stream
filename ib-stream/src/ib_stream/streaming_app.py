@@ -13,7 +13,6 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, Optional
 
 from ibapi.common import TickAttribBidAsk, TickAttribLast
-from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 
 # Import shared utilities
@@ -113,29 +112,9 @@ class StreamingApp(EWrapper):
         sys.exit(0)
 
     def error(self, reqId, errorCode, errorString, _advancedOrderRejectJson=""):
-        """Handle errors from TWS."""
-        try:
-            if errorCode == 502:
-                error_msg = "Couldn't connect to TWS. Make sure TWS/Gateway is running."
-                logger.error(error_msg)
-                if self.error_callback:
-                    self.error_callback("CONNECTION_ERROR", error_msg)
-            elif errorCode == 200:
-                error_msg = "No security definition found for contract ID"
-                logger.error(error_msg)
-                if self.error_callback:
-                    self.error_callback("CONTRACT_NOT_FOUND", error_msg)
-            elif errorCode in [2104, 2106, 2158]:
-                # Market data farm connection messages - can ignore
-                logger.info(f"Connection status: {errorString}")
-            else:
-                error_msg = f"Error {errorCode}: {errorString} (ReqId: {reqId})"
-                logger.error(error_msg)
-                if self.error_callback:
-                    self.error_callback(f"TWS_ERROR_{errorCode}", error_msg)
-        except Exception as e:
-            import traceback
-            logger.error("Exception in error handler: %s\nTraceback:\n%s", e, traceback.format_exc())
+        """Handle errors from TWS using standardized error handling."""
+        from ib_util import handle_streaming_error
+        handle_streaming_error(reqId, errorCode, errorString, logger, self.error_callback)
 
     def nextValidId(self, orderId):
         """Called when connection is established - must call IBConnection's method."""
@@ -282,9 +261,9 @@ class StreamingApp(EWrapper):
 
     def stream_contract(self, contract_id: int, tick_type: str = "Last"):
         """Start streaming tick-by-tick data for a contract."""
-        # Create contract with just the ID
-        contract = Contract()
-        contract.conId = contract_id
+        # Create contract using ib-util factory
+        from ib_util import create_contract_by_id
+        contract = create_contract_by_id(contract_id)
 
         # Request contract details first
         self.reqContractDetails(self.req_id, contract)

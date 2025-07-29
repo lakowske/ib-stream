@@ -16,21 +16,16 @@ from datetime import datetime
 from pathlib import Path
 
 from ibapi.client import EClient
-from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 
 # Import shared utilities
 from ib_util import IBConnection, connect_with_retry
 
-# Configure logging - suppress all TWS API noise
-logging.basicConfig(
-    level=logging.CRITICAL,  # Only show critical errors
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-# Suppress all ibapi logging
-logging.getLogger("ibapi").setLevel(logging.CRITICAL)
-logging.getLogger().setLevel(logging.CRITICAL)
-logger = logging.getLogger(__name__)
+# Configure logging using ib-util standardized logging
+from ib_util import configure_cli_logging, get_logger
+
+configure_cli_logging(verbose=False)
+logger = get_logger(__name__)
 
 
 class ContractLookupApp(IBConnection):
@@ -49,17 +44,15 @@ class ContractLookupApp(IBConnection):
         self.json_output = False
 
     def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
-        """Handle errors from TWS"""
-        if errorCode == 502:
-            logger.error("Couldn't connect to TWS. Make sure TWS/Gateway is running.")
-        elif errorCode == 200:
-            logger.warning(f"No security definition found for request {reqId}")
-            self.finished_requests.add(reqId)
-        elif errorCode in [2104, 2106, 2158]:
-            # Market data farm connection messages - can ignore
-            logger.info(f"Connection status: {errorString}")
-        else:
-            logger.error(f"Error {errorCode}: {errorString} (ReqId: {reqId})")
+        """Handle errors from TWS using standardized error handling"""
+        from ib_util import handle_tws_error
+        
+        # Custom callback to handle contract lookup specific logic
+        def contract_error_callback(req_id, error_code, error_msg):
+            if error_code == 200:  # No security definition found
+                self.finished_requests.add(req_id)
+        
+        handle_tws_error(reqId, errorCode, errorString, logger, contract_error_callback)
 
     def contractDetails(self, reqId, contractDetails):
         """Receive contract details from TWS"""
@@ -112,28 +105,9 @@ class ContractLookupApp(IBConnection):
         for sec_type in sec_types:
             logger.info(f"Requesting {sec_type} contracts for {ticker}...")
 
-            # Create contract for lookup
-            contract = Contract()
-            contract.symbol = ticker
-            contract.secType = sec_type
-
-            # Set appropriate defaults based on security type
-            if sec_type == "STK":
-                contract.exchange = "SMART"
-                contract.currency = "USD"
-            elif sec_type == "FUT":
-                contract.exchange = "CME"  # Common futures exchange
-                contract.currency = "USD"
-            elif sec_type == "OPT":
-                contract.exchange = "SMART"
-                contract.currency = "USD"
-            elif sec_type == "CASH":
-                contract.exchange = "IDEALPRO"
-                contract.currency = "USD"
-            elif sec_type == "IND":
-                contract.exchange = "CME"
-                contract.currency = "USD"
-            # For other types, leave exchange blank to search all
+            # Create contract for lookup using ib-util factory
+            from ib_util import create_contract_for_lookup
+            contract = create_contract_for_lookup(ticker, sec_type)
 
             # Request contract details
             self.reqContractDetails(self.req_id, contract)
@@ -346,38 +320,19 @@ class ContractLookupApp(IBConnection):
                     print(f"  {contract['symbol']}: {', '.join(details)}")
 
     def _prepare_json_data(self):
-        """Prepare contract data for JSON output"""
-        # Group contracts by security type
-        contracts_by_type = defaultdict(list)
-        for contract in self.contracts:
-            contracts_by_type[contract["sec_type"]].append(contract)
-
-        # Build JSON structure
-        result = {
-            "ticker": self.ticker.upper(),
-            "timestamp": datetime.now().isoformat(),
-            "security_types_searched": self.requested_types,
-            "total_contracts": len(self.contracts),
-            "contracts_by_type": {},
-            "summary": {},
-        }
-
-        # Add contracts by type
-        for sec_type, contracts in contracts_by_type.items():
-            result["contracts_by_type"][sec_type] = {
-                "count": len(contracts),
-                "contracts": contracts,
-            }
-
-        # Add summary counts
-        for sec_type in contracts_by_type.keys():
-            result["summary"][sec_type] = len(contracts_by_type[sec_type])
-
-        return result
+        """Prepare contract data for JSON output using ib-util formatting"""
+        from ib_util import create_contract_lookup_response
+        response = create_contract_lookup_response(
+            ticker=self.ticker,
+            contracts=self.contracts,
+            security_types_searched=self.requested_types
+        )
+        return response["data"]  # Extract just the data portion
 
     def _output_json(self, data):
-        """Output data as formatted JSON"""
-        print(json.dumps(data, indent=2, ensure_ascii=False))
+        """Output data as formatted JSON using ib-util formatting"""
+        from ib_util import format_json_response
+        print(format_json_response(data, ensure_ascii=False))
 
 
 def parse_arguments():

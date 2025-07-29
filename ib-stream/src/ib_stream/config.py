@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from pathlib import Path
 
+# Import enhanced environment loading from ib-util
+from ib_util import load_environment_file_with_detection
+
 
 @dataclass
 class TrackedContract:
@@ -326,52 +329,8 @@ def validate_config(config: ServerConfig) -> None:
 
 
 def load_environment_file(env_file_path: Optional[str] = None) -> None:
-    """Load environment variables from a .env file"""
-    if env_file_path is None:
-        # Try to detect environment from IB_STREAM_ENV or default to production
-        env_name = os.getenv("IB_STREAM_ENV", "production")
-        env_file_path = f"config/{env_name}.env"
-    
-    env_path = Path(env_file_path)
-    if not env_path.exists():
-        # Try relative to script directory
-        script_dir = Path(__file__).parent.parent.parent
-        env_path = script_dir / env_file_path
-    
-    if not env_path.exists():
-        return  # No environment file found, use existing env vars
-    
-    try:
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if not line or line.startswith('#'):
-                    continue
-                
-                # Parse KEY=VALUE format
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
-                    
-                    # Remove quotes if present
-                    if value.startswith('"') and value.endswith('"'):
-                        value = value[1:-1]
-                    elif value.startswith("'") and value.endswith("'"):
-                        value = value[1:-1]
-                    
-                    # Handle variable substitution ${VAR:-default}
-                    if value.startswith('${') and ':-' in value and value.endswith('}'):
-                        var_expr = value[2:-1]  # Remove ${ and }
-                        var_name, default_value = var_expr.split(':-', 1)
-                        value = os.getenv(var_name, default_value)
-                    
-                    # Only set if not already set (env vars take precedence)
-                    if key not in os.environ:
-                        os.environ[key] = value
-    except Exception as e:
-        print(f"Warning: Failed to load environment file {env_path}: {e}")
+    """Load environment variables from a .env file using ib-util enhanced parser"""
+    load_environment_file_with_detection(env_file_path)
 
 
 def create_config() -> ServerConfig:

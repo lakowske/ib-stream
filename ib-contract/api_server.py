@@ -20,12 +20,10 @@ from fastapi.responses import JSONResponse
 
 from contract_lookup import ContractLookupApp
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
-)
-logger = logging.getLogger(__name__)
+# Configure logging using ib-util standardized logging
+from ib_util import configure_service_logging, log_environment_info
+
+logger = configure_service_logging("ib-contract", verbose=True)
 
 # Cache configuration
 CACHE_DIR = Path("./.cache")
@@ -195,13 +193,8 @@ async def lifespan(_: FastAPI):
     # Startup
     logger.info("Starting TWS Contract Lookup API...")
     
-    # Log environment configuration
-    import os
-    logger.info("Environment configuration:")
-    logger.info(f"  IB_STREAM_HOST: {os.environ.get('IB_STREAM_HOST', 'not set')}")
-    logger.info(f"  IB_STREAM_PORTS: {os.environ.get('IB_STREAM_PORTS', 'not set')}")
-    logger.info(f"  IB_CONTRACTS_CLIENT_ID: {os.environ.get('IB_CONTRACTS_CLIENT_ID', 'not set')}")
-    logger.info(f"  Current working directory: {os.getcwd()}")
+    # Log environment configuration using standardized logging
+    log_environment_info(logger, "ib-contract")
     
     logger.info("Attempting to establish TWS connection...")
     try:
@@ -249,30 +242,34 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint using ib-util standardized formatting"""
+    from ib_util import create_health_check_response
+    
     try:
         tws_connected = tws_app is not None and tws_app.is_connected()
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "tws_connected": tws_connected,
-            "cache_entries": len(contract_cache),
-        }
+        return create_health_check_response(
+            service_name="ib-contract",
+            status="healthy",
+            details={
+                "tws_connected": tws_connected,
+                "cache_entries": len(contract_cache),
+            }
+        )
     except Exception as e:
         logger.error("Health check failed: %s", e)
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "timestamp": datetime.now().isoformat(),
-                "error": str(e),
-            },
+        response = create_health_check_response(
+            service_name="ib-contract",
+            status="unhealthy",
+            details={"error": str(e)}
         )
+        return JSONResponse(status_code=503, content=response)
 
 
 @app.get("/cache/status")
 async def cache_status():
-    """Get cache status"""
+    """Get cache status using ib-util standardized formatting"""
+    from ib_util import format_cache_status_response
+    
     cache_info = {}
     file_cache_info = {}
 
@@ -295,14 +292,12 @@ async def cache_status():
                 "file_size": cache_file.stat().st_size,
             }
 
-    return {
-        "memory_cache_entries": len(contract_cache),
-        "file_cache_entries": len(file_cache_info),
-        "cache_duration_days": CACHE_DURATION.days,
-        "cache_directory": str(CACHE_DIR),
-        "memory_cache": cache_info,
-        "file_cache": file_cache_info,
-    }
+    return format_cache_status_response(
+        memory_cache=cache_info,
+        file_cache=file_cache_info,
+        cache_duration_days=CACHE_DURATION.days,
+        cache_directory=str(CACHE_DIR)
+    )
 
 
 @app.delete("/cache/clear")

@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Set
 from .config import TrackedContract
 from .stream_manager import stream_manager, StreamHandler
 from .streaming_app import StreamingApp
-from .utils import connect_to_tws
 
 logger = logging.getLogger(__name__)
 
@@ -192,29 +191,26 @@ class BackgroundStreamManager:
         try:
             logger.info("Establishing TWS connection for background streaming...")
             
-            # Use a different client ID for background streaming
-            client_id = 10  # Different from main server client ID (2)
+            # Create StreamingApp with background-specific client ID
+            from ib_util import ConnectionConfig
             
-            self.tws_app = StreamingApp(json_output=True)
+            # Use a different client ID for background streaming to avoid conflicts
+            background_config = ConnectionConfig(
+                host="127.0.0.1",  # TODO: Should use same config as main service
+                ports=[7497, 7496, 4002, 4001],
+                client_id=10,  # Different from main server client ID
+                connection_timeout=15
+            )
             
-            if not connect_to_tws(self.tws_app, client_id=client_id):
+            self.tws_app = StreamingApp(json_output=True, config=background_config)
+            
+            if not self.tws_app.connect_and_start():
                 logger.error("Failed to connect to TWS for background streaming")
                 self.tws_app = None
                 return
             
-            # Wait for connection to be ready
-            timeout = 10
-            start_time = time.time()
-            while not self.tws_app.connected and (time.time() - start_time) < timeout:
-                await asyncio.sleep(0.1)
-            
-            if not self.tws_app.connected:
-                logger.error("TWS connection established but not ready for background streaming")
-                self.tws_app.disconnect()
-                self.tws_app = None
-                return
-            
-            logger.info("TWS connection established for background streaming (client ID: %d)", client_id)
+            # Connection is already established and verified by connect_and_start()
+            logger.info("Background TWS connection established successfully")
             
         except Exception as e:
             logger.error("Failed to establish TWS connection for background streaming: %s", e)
@@ -280,11 +276,10 @@ class BackgroundStreamManager:
                     # Start the stream with specific request ID
                     # Note: We need to manually set up the stream since StreamingApp.stream_contract
                     # uses its own request ID management
-                    from ibapi.contract import Contract
+                    from ib_util import create_contract_by_id
                     
-                    # Create contract
-                    contract = Contract()
-                    contract.conId = contract_id
+                    # Create contract using ib-util factory
+                    contract = create_contract_by_id(contract_id)
                     
                     # Request contract details first
                     self.tws_app.reqContractDetails(request_id, contract)
