@@ -14,7 +14,7 @@ YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
 
-.PHONY: help setup clean build-api install-packages test-connection dev-server
+.PHONY: help setup clean build-api install-packages test-connection
 
 help:
 	@echo "IB-Stream Development Environment"
@@ -23,9 +23,8 @@ help:
 	@echo "Available targets:"
 	@echo "  setup           - Full development environment setup"
 	@echo "  build-api       - Build and install TWS API from contrib/"
-	@echo "  install-packages - Install ib-stream packages in development mode"
+	@echo "  install-packages - Install ib-util and ib-stream packages in development mode"
 	@echo "  test-connection  - Test connection to remote gateway (requires running gateway)"
-	@echo "  dev-server      - Start development server with remote gateway config"
 	@echo "  clean           - Clean up virtual environment and build artifacts"
 	@echo ""
 	@echo "Configuration:"
@@ -57,9 +56,12 @@ build-api: $(VENV_DIR)
 	$(VENV_PYTHON) -c "from ibapi.client import EClient; print('✓ ibapi installed successfully')"
 
 install-packages: $(VENV_DIR)
-	@echo -e "$(YELLOW)Installing ib-stream packages in development mode...$(NC)"
+	@echo -e "$(YELLOW)Installing ib-util and ib-stream packages in development mode...$(NC)"
+	$(VENV_PIP) install -e ib-util/
 	$(VENV_PIP) install -e ib-stream/
 	$(VENV_PIP) install -e ib-studies/
+	@echo -e "$(YELLOW)Verifying ib-util installation...$(NC)"
+	$(VENV_PYTHON) -c "from ib_util import IBConnection; print('✓ ib-util installed successfully')"
 	@echo -e "$(GREEN)✓ All packages installed$(NC)"
 
 test-connection: $(VENV_DIR)
@@ -72,11 +74,6 @@ test-connection: $(VENV_DIR)
 	echo -e "$(YELLOW)Testing with a sample contract (this will fail if gateway is not running):$(NC)" && \
 	timeout 10s $(PWD)/$(VENV_PYTHON) -m ib_stream.stream 265598 --number 1 --json || echo -e "$(RED)Connection failed - make sure IB Gateway is running on 192.168.0.60$(NC)"
 
-dev-server: $(VENV_DIR)
-	@echo -e "$(YELLOW)Starting development server with remote gateway configuration...$(NC)"
-	cd ib-stream && \
-	export IB_STREAM_ENV=remote-gateway && \
-	$(PWD)/$(VENV_PYTHON) -m ib_stream.api_server
 
 check-config: $(VENV_DIR)
 	@echo -e "$(YELLOW)Current configuration:$(NC)"
