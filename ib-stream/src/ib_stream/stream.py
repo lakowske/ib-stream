@@ -8,7 +8,8 @@ import sys
 import time
 
 from .streaming_app import StreamingApp
-from .utils import configure_logging, connect_to_tws, print_connection_error
+from .utils import configure_logging, print_connection_error
+from .config import create_config
 
 
 def parse_arguments():
@@ -98,6 +99,14 @@ def main():
     """Main entry point for the CLI."""
     args = parse_arguments()
 
+    # Load configuration from environment
+    try:
+        config = create_config()
+    except Exception as e:
+        if not args.json:
+            print(f"Configuration error: {e}")
+        sys.exit(1)
+
     # Configure logging
     configure_logging(args.verbose)
 
@@ -109,27 +118,27 @@ def main():
         print(f"Data Type: {args.type}")
         if args.number:
             print(f"Max Ticks: {args.number}")
-        print("\nConnecting to TWS...")
+        print(f"Connecting to TWS at {config.host}:{','.join(map(str, config.ports))}...")
         print()
 
-    # Create streaming app
-    app = StreamingApp(max_ticks=args.number, json_output=args.json)
+    # Create streaming app with custom client ID if provided
+    if args.client_id != 2:
+        # Create custom config with override client ID
+        from ib_util import ConnectionConfig
+        custom_config = ConnectionConfig(
+            host=config.host,
+            ports=config.ports,
+            client_id=args.client_id,
+            connection_timeout=config.connection_timeout
+        )
+        app = StreamingApp(max_ticks=args.number, json_output=args.json, config=custom_config)
+    else:
+        app = StreamingApp(max_ticks=args.number, json_output=args.json)
 
-    # Connect to TWS
-    if not connect_to_tws(app, client_id=args.client_id):
+    # Connect to TWS using the reliable connection handling
+    if not app.connect_and_start():
         if not args.json:
-            print_connection_error()
-        sys.exit(1)
-
-    # Wait for connection to be ready
-    timeout = 2
-    start_time = time.time()
-    while not app.connected and (time.time() - start_time) < timeout:
-        time.sleep(0.1)
-
-    if not app.connected:
-        if not args.json:
-            print("Failed to establish connection with TWS")
+            print_connection_error(host=config.host, ports=config.ports)
         sys.exit(1)
 
     try:

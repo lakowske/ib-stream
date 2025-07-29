@@ -12,10 +12,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, Optional
 
-from ibapi.client import EClient
 from ibapi.common import TickAttribBidAsk, TickAttribLast
 from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
+
+# Import shared utilities
+from ib_util import IBConnection, load_environment_config
 
 from .formatters import (
     BidAskFormatter,
@@ -27,19 +29,29 @@ from .formatters import (
 logger = logging.getLogger(__name__)
 
 
-class StreamingApp(EWrapper, EClient):
-    """Application for streaming tick-by-tick data from TWS."""
+class StreamingApp(EWrapper):
+    """Application for streaming tick-by-tick data from TWS using ib-util connection."""
 
     def __init__(self, max_ticks: Optional[int] = None, json_output: bool = False,
                  tick_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
                  error_callback: Optional[Callable[[str, str], None]] = None,
-                 complete_callback: Optional[Callable[[str, int], None]] = None):
-        EClient.__init__(self, self)
+                 complete_callback: Optional[Callable[[str, int], None]] = None,
+                 config=None):
+        EWrapper.__init__(self)
+        
+        if config is None:
+            config = load_environment_config("stream")
+        
+        # Use composition - hold an IBConnection instance
+        self._ib_connection = IBConnection(config)
+        
+        # Set ourselves as the wrapper for the connection
+        self._ib_connection.wrapper = self
+        
         self.max_ticks = max_ticks
         self.json_output = json_output
         self.tick_count = 0
         self.req_id = 1000
-        self.connected = False
         self.contract_details = None  # Keep for backward compatibility
         self.contract_details_by_req_id = {}  # Store contract details per request ID
         self.streaming_stopped = False
@@ -52,6 +64,45 @@ class StreamingApp(EWrapper, EClient):
         # Set up signal handler for graceful shutdown only if not in callback mode
         if not self.tick_callback:
             signal.signal(signal.SIGINT, self._signal_handler)
+    
+    # Delegate connection methods to IBConnection
+    def connect_and_start(self) -> bool:
+        """Connect using the reliable IBConnection"""
+        return self._ib_connection.connect_and_start()
+    
+    def disconnect_and_stop(self):
+        """Disconnect using IBConnection"""
+        self._ib_connection.disconnect_and_stop()
+    
+    def is_connected(self) -> bool:
+        """Check connection status"""
+        return self._ib_connection.is_connected()
+    
+    def isConnected(self) -> bool:
+        """Legacy method for backward compatibility"""
+        return self._ib_connection.isConnected()
+    
+    def disconnect(self):
+        """Legacy disconnect method"""
+        self._ib_connection.disconnect()
+    
+    # Delegate EClient methods to IBConnection
+    def reqContractDetails(self, reqId: int, contract):
+        """Request contract details"""
+        return self._ib_connection.reqContractDetails(reqId, contract)
+    
+    def reqTickByTickData(self, reqId: int, contract, tickType: str, numberOfTicks: int, ignoreSize: bool):
+        """Request tick-by-tick data"""
+        return self._ib_connection.reqTickByTickData(reqId, contract, tickType, numberOfTicks, ignoreSize)
+    
+    def cancelTickByTickData(self, reqId: int):
+        """Cancel tick-by-tick data"""
+        return self._ib_connection.cancelTickByTickData(reqId)
+    
+    @property
+    def config(self):
+        """Access to connection configuration"""
+        return self._ib_connection.config
 
     def _signal_handler(self, _signum, _frame):
         """Handle Ctrl+C for graceful shutdown."""
@@ -87,9 +138,12 @@ class StreamingApp(EWrapper, EClient):
             logger.error("Exception in error handler: %s\nTraceback:\n%s", e, traceback.format_exc())
 
     def nextValidId(self, orderId):
-        """Called when connection is established."""
-        self.connected = True
-        logger.info(f"Connected. Next valid order ID: {orderId}")
+        """Called when connection is established - must call IBConnection's method."""
+        # CRITICAL: Call IBConnection's nextValidId to set connection_event
+        self._ib_connection.nextValidId(orderId)
+        
+        # Then do our streaming app specific logging
+        logger.info(f"✓ Streaming app ready with ib-util connection. Next valid order ID: {orderId}")
 
     def contractDetails(self, reqId, contractDetails):
         """Receive contract details."""

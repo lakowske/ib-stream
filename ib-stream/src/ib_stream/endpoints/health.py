@@ -32,7 +32,7 @@ def setup_health_endpoints(app, config):
             active_streams = app_state['active_streams']
             stream_lock = app_state['stream_lock']
             
-            tws_connected = tws_app is not None and tws_app.isConnected()
+            tws_connected = tws_app is not None and tws_app.is_connected()
             with stream_lock:
                 active_stream_count = len(active_streams)
 

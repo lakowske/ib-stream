@@ -361,6 +361,12 @@ def load_environment_file(env_file_path: Optional[str] = None) -> None:
                     elif value.startswith("'") and value.endswith("'"):
                         value = value[1:-1]
                     
+                    # Handle variable substitution ${VAR:-default}
+                    if value.startswith('${') and ':-' in value and value.endswith('}'):
+                        var_expr = value[2:-1]  # Remove ${ and }
+                        var_name, default_value = var_expr.split(':-', 1)
+                        value = os.getenv(var_name, default_value)
+                    
                     # Only set if not already set (env vars take precedence)
                     if key not in os.environ:
                         os.environ[key] = value
@@ -370,7 +376,10 @@ def load_environment_file(env_file_path: Optional[str] = None) -> None:
 
 def create_config() -> ServerConfig:
     """Create and validate configuration"""
-    # Load environment file first (if present)
+    # Load instance-specific configuration first
+    load_environment_file("config/instance.env")
+    
+    # Load environment file (if present)
     load_environment_file()
     
     config = load_config_from_env()

@@ -138,4 +138,41 @@ Supervisor automatically saves logs to:
 
 - `supervisor.conf` - Main supervisor configuration
 - `config/query-only.env` - Environment configuration for query-only mode
+- `config/remote-gateway.env` - Configuration for connecting to remote IB Gateway
 - Process IDs and supervisor state are managed automatically by supervisor daemon
+
+## Remote Gateway Configuration
+
+### Connecting to Remote IB Gateway
+
+To connect ib-stream to a remote IB Gateway (e.g., running on 192.168.0.60):
+
+#### Quick Setup
+```bash
+# Full development environment setup
+make setup
+
+# Test connection to remote gateway
+make test-connection
+
+# Start server with remote gateway
+make dev-server
+```
+
+#### Manual Configuration
+```bash
+# Set environment to use remote gateway config
+export IB_STREAM_ENV=remote-gateway
+
+# Test CLI with remote gateway
+cd ib-stream && python -m ib_stream.stream 265598 --number 5
+```
+
+#### Configuration File
+Remote gateway settings are in `ib-stream/config/remote-gateway.env`:
+- `IB_STREAM_HOST=192.168.0.60` - Remote gateway IP
+- `IB_STREAM_PORTS=4001,4002,7496,7497` - Ports to try (Gateway ports first)
+- `IB_STREAM_CLIENT_ID=10` - Client ID for connections
+
+#### Note about Contract Lookup
+The `ib-contract` tool still uses hardcoded localhost. To use with remote gateway, manually update the host in `ib-contract/contract_lookup.py` line 426.

@@ -14,7 +14,6 @@ from fastapi import HTTPException
 from .config import create_config
 from .storage import MultiStorage
 from .streaming_app import StreamingApp
-from .utils import connect_to_tws
 from .stream_manager import stream_manager
 from .background_stream_manager import BackgroundStreamManager
 
@@ -35,25 +34,19 @@ def ensure_tws_connection() -> StreamingApp:
     global tws_app
 
     with tws_lock:
-        if tws_app is None or not tws_app.isConnected():
-            logger.info("Establishing TWS connection with client ID %d...", config.client_id)
-            tws_app = StreamingApp(json_output=True)
+        # Check if we already have a working connection
+        if tws_app is not None and tws_app.is_connected():
+            logger.debug("Using existing TWS connection")
+            return tws_app
+            
+        logger.info("Establishing TWS connection...")
+        tws_app = StreamingApp(json_output=True)
+        
+        if not tws_app.connect_and_start():
+            msg = "Unable to connect to TWS/Gateway. Please ensure it's running with API enabled."
+            raise HTTPException(status_code=503, detail=msg)
 
-            if not connect_to_tws(tws_app, client_id=config.client_id):
-                msg = "Unable to connect to TWS/Gateway. Please ensure it's running with API enabled."
-                raise HTTPException(status_code=503, detail=msg)
-
-            # Wait for connection to be ready
-            timeout = config.connection_timeout
-            start_time = time.time()
-            while not tws_app.connected and (time.time() - start_time) < timeout:
-                time.sleep(0.1)
-
-            if not tws_app.connected:
-                msg = "TWS connection established but not ready"
-                raise HTTPException(status_code=503, detail=msg)
-
-            logger.info("TWS connection established successfully")
+        logger.info("TWS connection established successfully with client ID %d", tws_app.config.client_id)
 
     return tws_app
 
@@ -64,8 +57,9 @@ async def lifespan(_):
     # Startup
     logger.info("Starting IB Stream API Server...")
     logger.info("Configuration:")
-    logger.info("  Client ID: %d", config.client_id)
+    logger.info("  Client ID: %d", config.client_id)  
     logger.info("  Host: %s", config.host)
+    logger.info("  Ports: %s", config.ports)
     logger.info("  Max Streams: %d", config.max_concurrent_streams)
     if config.default_timeout_seconds is not None:
         logger.info("  Default Timeout: %d seconds", config.default_timeout_seconds)
@@ -164,7 +158,7 @@ async def lifespan(_):
         except Exception as e:
             logger.error("Error stopping storage system: %s", e)
     
-    if tws_app and tws_app.isConnected():
+    if tws_app and tws_app.is_connected():
         # Stop all active streams
         with stream_lock:
             for stream_id in list(active_streams.keys()):
@@ -174,7 +168,7 @@ async def lifespan(_):
                     logger.warning("Error cancelling stream %s: %s", stream_id, e)
             active_streams.clear()
 
-        tws_app.disconnect()
+        tws_app.disconnect_and_stop()
         logger.info("TWS connection closed")
 
 

@@ -26,20 +26,21 @@ def configure_logging(verbose: bool = False) -> None:
         logging.getLogger().setLevel(logging.CRITICAL)
 
 
-def connect_to_tws(app: EClient, client_id: int = 2) -> bool:
+def connect_to_tws(app: EClient, client_id: int = 2, host: str = "127.0.0.1", ports: list = None) -> bool:
     """
     Try to connect to TWS/Gateway on various ports.
 
     Args:
         app: The EClient instance to connect
         client_id: Client ID for the connection
+        host: TWS/Gateway host (default: 127.0.0.1)
+        ports: List of ports to try (default: [7497, 7496, 4002, 4001])
 
     Returns:
         bool: True if connected successfully, False otherwise
     """
-    host = "127.0.0.1"
     # Try different ports: Paper TWS, Live TWS, Paper Gateway, Live Gateway
-    ports_to_try = [7497, 7496, 4002, 4001]
+    ports_to_try = ports or [7497, 7496, 4002, 4001]
 
     for port in ports_to_try:
         try:
@@ -63,12 +64,15 @@ def connect_to_tws(app: EClient, client_id: int = 2) -> bool:
     return False
 
 
-def print_connection_error() -> None:
+def print_connection_error(host: str = "127.0.0.1", ports: list = None) -> None:
     """Print helpful error message when connection fails."""
-    print("Failed to connect to TWS. Please check:")
-    print("1. TWS or IB Gateway is running")
-    print("2. API connections are enabled in TWS settings")
-    print("3. The correct port is being used")
+    ports = ports or [7497, 7496, 4002, 4001]
+    print(f"Failed to connect to TWS/Gateway at {host}. Please check:")
+    print("1. TWS or IB Gateway is running on the target host")
+    print("2. API connections are enabled in TWS/Gateway settings")
+    print("3. The correct host and ports are configured")
+    print(f"4. Network connectivity to {host} on ports {ports}")
+    print("   Default port mappings:")
     print("   - Paper TWS: 7497")
     print("   - Live TWS: 7496")
     print("   - Paper Gateway: 4002")

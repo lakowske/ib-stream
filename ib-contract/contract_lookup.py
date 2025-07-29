@@ -8,14 +8,19 @@ Can optionally filter by security type or show all types if none specified.
 import argparse
 import json
 import logging
+import os
 import threading
 import time
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 
 from ibapi.client import EClient
 from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
+
+# Import shared utilities
+from ib_util import IBConnection, connect_with_retry
 
 # Configure logging - suppress all TWS API noise
 logging.basicConfig(
@@ -28,9 +33,13 @@ logging.getLogger().setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
 
-class ContractLookupApp(EWrapper, EClient):
-    def __init__(self):
-        EClient.__init__(self, self)
+class ContractLookupApp(IBConnection):
+    def __init__(self, config=None):
+        if config is None:
+            from ib_util import load_environment_config
+            config = load_environment_config("contracts")
+        
+        super().__init__(config)
         self.contracts = []
         self.req_id = 1000
         self.finished_requests = set()
@@ -420,49 +429,18 @@ Security Types:
 
 def connect_to_tws():
     """Connect to TWS/Gateway and return the app instance"""
+    # Create ContractLookupApp with built-in reliable connection
     app = ContractLookupApp()
-
-    # Try to connect to different ports
-    host = "127.0.0.1"
-    ports_to_try = [7497, 7496, 4002, 4001]  # Paper TWS, Live TWS, Paper Gateway, Live Gateway
-    client_id = 1
-
-    connected = False
-    for port in ports_to_try:
-        try:
-            # Try to connect - only log errors
-            app.connect(host, port, client_id)
-
-            # Start the socket in a thread
-            api_thread = threading.Thread(target=app.run, daemon=True)
-            api_thread.start()
-
-            # Wait a moment for connection
-            time.sleep(2)
-
-            if app.isConnected():
-                # Connected successfully - only log errors
-                connected = True
-                break
-            else:
-                app.disconnect()
-
-        except Exception:
-            # Connection failed - try next port
-            continue
-
-    if not connected:
+    
+    # Connect using the reliable connection handling
+    if app.connect_and_start():
+        return app
+    else:
         print("Failed to connect to TWS. Please check:")
         print("1. TWS or IB Gateway is running")
-        print("2. API connections are enabled in TWS settings")
-        print("3. The correct port is being used")
-        print("   - Paper TWS: 7497")
-        print("   - Live TWS: 7496")
-        print("   - Paper Gateway: 4002")
-        print("   - Live Gateway: 4001")
+        print("2. API connections are enabled")
+        print("3. Connection parameters are correct")
         return None
-
-    return app
 
 
 def main():

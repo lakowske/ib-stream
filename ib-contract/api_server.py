@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from contract_lookup import ContractLookupApp, connect_to_tws
+from contract_lookup import ContractLookupApp
 
 # Configure logging
 logging.basicConfig(
@@ -120,10 +120,10 @@ def ensure_tws_connection() -> ContractLookupApp:
     global tws_app
 
     with tws_lock:
-        if tws_app is None or not tws_app.isConnected():
+        if tws_app is None or not tws_app.is_connected():
             logger.info("Establishing TWS connection...")
-            tws_app = connect_to_tws()
-            if tws_app is None:
+            tws_app = ContractLookupApp()
+            if not tws_app.connect_and_start():
                 msg = (
                     "Unable to connect to TWS/Gateway. Please ensure it's running with API enabled."
                 )
@@ -194,6 +194,15 @@ async def lifespan(_: FastAPI):
     """Lifespan event handler for startup/shutdown"""
     # Startup
     logger.info("Starting TWS Contract Lookup API...")
+    
+    # Log environment configuration
+    import os
+    logger.info("Environment configuration:")
+    logger.info(f"  IB_STREAM_HOST: {os.environ.get('IB_STREAM_HOST', 'not set')}")
+    logger.info(f"  IB_STREAM_PORTS: {os.environ.get('IB_STREAM_PORTS', 'not set')}")
+    logger.info(f"  IB_CONTRACTS_CLIENT_ID: {os.environ.get('IB_CONTRACTS_CLIENT_ID', 'not set')}")
+    logger.info(f"  Current working directory: {os.getcwd()}")
+    
     logger.info("Attempting to establish TWS connection...")
     try:
         ensure_tws_connection()
@@ -207,8 +216,8 @@ async def lifespan(_: FastAPI):
     # Shutdown
     logger.info("Shutting down TWS Contract Lookup API...")
     global tws_app
-    if tws_app and tws_app.isConnected():
-        tws_app.disconnect()
+    if tws_app and tws_app.is_connected():
+        tws_app.disconnect_and_stop()
         logger.info("TWS connection closed")
 
 
@@ -242,7 +251,7 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     try:
-        tws_connected = tws_app is not None and tws_app.isConnected()
+        tws_connected = tws_app is not None and tws_app.is_connected()
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -361,7 +370,9 @@ async def lookup_ticker_with_type(ticker: str, sec_type: str):
 
 def main():
     """Main function to run the server"""
-    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, log_level="info", reload=True)
+    import os
+    port = int(os.environ.get("IB_CONTRACTS_PORT", 8000))
+    uvicorn.run("api_server:app", host="0.0.0.0", port=port, log_level="info", reload=True)
 
 
 if __name__ == "__main__":
