@@ -83,54 +83,64 @@ echo "✓ Git branch: $(git branch --show-current)"
 - Use the project's Makefile `setup` target which performs:
   - Creates `.venv` virtual environment
   - Builds and installs TWS API from `contrib/` directory
-  - Installs ib-stream packages in development mode (`ib-stream/`, `ib-studies/`)
+  - Installs ib-util, ib-stream, and ib-studies packages in development mode
   - Verifies all installations are working correctly
 - Run `make setup` to complete the full development environment setup
 
-### 5. Verification and Next Steps
+**Note**: The updated Makefile now automatically installs ib-util, eliminating the need for manual package verification tests.
 
-Perform comprehensive verification to ensure everything is working correctly:
+### 5. Service Setup and Health Verification
+
+Generate instance configuration and start services to verify complete functionality:
 
 ```bash
-# Verify worktree creation
+# Step 5a: Generate instance-specific configuration
+echo "Generating instance configuration..."
+make generate-instance-config
+
+# Step 5b: Start services using supervisor
+echo "Starting services..."
+make start-supervisor
+
+# Step 5c: Check service status
+echo "Checking service status..."
+make supervisor-status
+
+# Step 5d: Wait for services to fully start (give them a moment)
+echo "Waiting for services to initialize..."
+sleep 5
+
+# Step 5e: Health check both services
+echo "Performing health checks..."
+
+# Get the ports from the instance config
+STREAM_PORT=$(python -c "import sys; sys.path.append('ib-stream/src'); from ib_stream.config import create_config; print(create_config().server_port)" 2>/dev/null || echo "8096")
+CONTRACTS_PORT=$((STREAM_PORT + 10))
+
+echo "Testing ib-stream health on port $STREAM_PORT..."
+curl -s http://localhost:$STREAM_PORT/health | head -1 | grep -q "healthy" && echo "✓ ib-stream service healthy" || echo "✗ ib-stream service not responding"
+
+echo "Testing ib-contracts health on port $CONTRACTS_PORT..."
+curl -s http://localhost:$CONTRACTS_PORT/health | head -1 | grep -q "healthy" && echo "✓ ib-contracts service healthy" || echo "✗ ib-contracts service not responding"
+
+# Step 5f: Verification summary
+echo ""
 echo "✓ New worktree created at: $(pwd)"
 echo "✓ Git branch: $(git branch --show-current)"
-
-# Verify virtual environment
-if [ -d ".venv" ]; then
-    echo "✓ Virtual environment created"
-else
-    echo "✗ Virtual environment missing - check make setup output"
-fi
-
-# Verify TWS API installation
-if .venv/bin/python -c "from ibapi.client import EClient" 2>/dev/null; then
-    echo "✓ TWS API installed successfully"
-else
-    echo "✗ TWS API installation failed - check contrib/ directory"
-fi
-
-# Verify ib-util package installation  
-if .venv/bin/python -c "from ib_util import IBConnection" 2>/dev/null; then
-    echo "✓ ib-util package installed"
-else
-    echo "✗ ib-util package installation failed"
-fi
-
-# Verify ib-stream package installation
-if .venv/bin/python -c "import ib_stream" 2>/dev/null; then
-    echo "✓ ib-stream package installed"
-else
-    echo "✗ ib-stream package installation failed"
-fi
-
-# Show next steps
+echo "✓ Development environment set up with make setup"
+echo "✓ Services started with supervisor"
 echo ""
 echo "To activate virtual environment:"
 echo "  source .venv/bin/activate"
 echo ""
-echo "Available Makefile targets:"
-make help | grep -E "^  " || echo "  Run 'make help' to see available targets"
+echo "Service endpoints:"
+echo "  ib-stream: http://localhost:$STREAM_PORT/"
+echo "  ib-contracts: http://localhost:$CONTRACTS_PORT/"
+echo ""
+echo "Management commands:"
+echo "  make supervisor-status  - Check service status"
+echo "  make supervisor-logs    - View service logs"
+echo "  make supervisor-stop    - Stop all services"
 ```
 
 ## Example Commands to Generate
@@ -163,34 +173,43 @@ echo "✓ Git branch: $(git branch --show-current)"
 echo "Setting up development environment..."
 make setup
 
-# Step 5: Comprehensive verification
+# Step 5: Service setup and health verification
+echo "Generating instance configuration..."
+make generate-instance-config
+
+echo "Starting services..."
+make start-supervisor
+
+echo "Checking service status..."
+make supervisor-status
+
+echo "Waiting for services to initialize..."
+sleep 5
+
+echo "Performing health checks..."
+STREAM_PORT=$(python -c "import sys; sys.path.append('ib-stream/src'); from ib_stream.config import create_config; print(create_config().server_port)" 2>/dev/null || echo "8096")
+CONTRACTS_PORT=$((STREAM_PORT + 10))
+
+echo "Testing ib-stream health on port $STREAM_PORT..."
+curl -s http://localhost:$STREAM_PORT/health | head -1 | grep -q "healthy" && echo "✓ ib-stream service healthy" || echo "✗ ib-stream service not responding"
+
+echo "Testing ib-contracts health on port $CONTRACTS_PORT..."
+curl -s http://localhost:$CONTRACTS_PORT/health | head -1 | grep -q "healthy" && echo "✓ ib-contracts service healthy" || echo "✗ ib-contracts service not responding"
+
+echo ""
 echo "✓ New worktree created at: $(pwd)"
 echo "✓ Git branch: $(git branch --show-current)"
-
-if [ -d ".venv" ]; then
-    echo "✓ Virtual environment created"
-else
-    echo "✗ Virtual environment missing - check make setup output"
-fi
-
-if .venv/bin/python -c "from ibapi.client import EClient" 2>/dev/null; then
-    echo "✓ TWS API installed successfully"
-else
-    echo "✗ TWS API installation failed - check contrib/ directory"
-fi
-
-if .venv/bin/python -c "from ib_util import IBConnection" 2>/dev/null; then
-    echo "✓ ib-util package installed"
-else
-    echo "✗ ib-util package installation failed"
-fi
-
+echo "✓ Development environment set up with make setup"
+echo "✓ Services started with supervisor"
 echo ""
-echo "To activate virtual environment:"
-echo "  source .venv/bin/activate"
+echo "Service endpoints:"
+echo "  ib-stream: http://localhost:$STREAM_PORT/"
+echo "  ib-contracts: http://localhost:$CONTRACTS_PORT/"
 echo ""
-echo "Available Makefile targets:"
-make help | grep -E "^  " || echo "  Run 'make help' to see available targets"
+echo "Management commands:"
+echo "  make supervisor-status  - Check service status"
+echo "  make supervisor-logs    - View service logs"
+echo "  make supervisor-stop    - Stop all services"
 ```
 
 ## Common Issues and Troubleshooting
@@ -218,11 +237,17 @@ make help | grep -E "^  " || echo "  Run 'make help' to see available targets"
 
 ### Service Startup Failures
 - **Problem**: Services fail with "ModuleNotFoundError: No module named 'ib_util'"
-- **Solution**: Install ib-util package after running `make setup`:
-  ```bash 
-  .venv/bin/pip install -e ib-util/
-  ```
-- **Note**: This dependency should be added to the Makefile's `install-packages` target
+- **Solution**: The updated Makefile should install ib-util automatically with `make setup`
+- **Alternative**: Manually install if needed: `.venv/bin/pip install -e ib-util/`
+
+### Service Health Check Failures
+- **Problem**: Health checks fail or services don't respond
+- **Solutions**:
+  - Check supervisor status: `make supervisor-status`
+  - View service logs: `make supervisor-logs`
+  - Restart services: `./supervisor-wrapper.sh restart all`
+  - Verify IB Gateway is running and accessible
+  - Check for port conflicts (each worktree gets unique ports)
 
 ### Shell Complexity Issues
 - **Problem**: Complex bash commands fail with syntax errors
@@ -257,8 +282,11 @@ Provide the exact bash commands to run, with clear explanations of what each com
 - Virtual environment created with all dependencies installed
 - TWS API built and installed from contrib/ directory
 - ib-util, ib-stream and ib-studies packages installed in development mode
-- All package installations verified through import tests
-- Clear instructions provided for activation and next steps
+- Instance configuration generated with unique ports and client IDs
+- Both ib-stream and ib-contracts services started via supervisor
+- Health checks pass for both services (return "healthy" status)
+- Service endpoints accessible and responding correctly
+- Clear instructions provided for service management and development workflow
 
 ## Implementation Notes
 
