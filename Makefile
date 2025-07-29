@@ -133,33 +133,36 @@ generate-instance-config:
 	@echo -e "$(YELLOW)Generating instance-specific configuration...$(NC)"
 	$(VENV_PYTHON) generate_instance_config.py
 
-start-supervisor: install-supervisor generate-instance-config
-	@echo -e "$(YELLOW)Starting supervisor with remote gateway configuration...$(NC)"
+start-supervisor: install-supervisor 
+	@echo -e "$(YELLOW)Starting supervisor with dynamic instance configuration...$(NC)"
 	./start-supervisor.sh
 
 supervisor-status:
 	@echo -e "$(YELLOW)Supervisor status:$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf status
+	@echo "Generated instance configuration:"
+	@$(VENV_PYTHON) generate_instance_config.py | grep -E "(Client ID|HTTP Port)" | sed 's/^/  /'
+	@echo ""
+	./supervisor-wrapper.sh status
 
 supervisor-start:
 	@echo -e "$(YELLOW)Starting ib-stream-remote service...$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf start ib-stream-remote
+	./supervisor-wrapper.sh start ib-stream-remote
 
 supervisor-stop:
 	@echo -e "$(YELLOW)Stopping services...$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf stop all
+	./supervisor-wrapper.sh stop all
 
 supervisor-logs:
 	@echo -e "$(YELLOW)Following ib-stream-remote logs...$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf tail -f ib-stream-remote
+	./supervisor-wrapper.sh tail -f ib-stream-remote
 
 supervisor-restart:
 	@echo -e "$(YELLOW)Restarting ib-stream-remote service...$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf restart ib-stream-remote
+	./supervisor-wrapper.sh restart ib-stream-remote
 
 stop-supervisor:
 	@echo -e "$(YELLOW)Stopping supervisor...$(NC)"
-	PROJECT_ROOT=$(PWD) USER=$(shell whoami) $(VENV_DIR)/bin/supervisorctl -c supervisor.conf shutdown
+	./supervisor-wrapper.sh shutdown
 
 # Install just the development tools
 dev-tools: $(VENV_DIR)
