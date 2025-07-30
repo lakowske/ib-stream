@@ -43,6 +43,7 @@ This specification defines the optimized storage format for IB Stream market dat
   "st": 1753837634777542,
   "cid": 711280073,
   "tt": "bid_ask",
+  "rid": 1234567890,
   "bp": 23477.5,
   "ap": 23478.0,
   "bs": 6.0,
@@ -59,6 +60,7 @@ message TickMessage {
   int64 st = 2;          // system_timestamp (microseconds since epoch)
   int32 cid = 3;         // contract_id
   string tt = 4;         // tick_type
+  int32 rid = 5;         // request_id (hash-generated, collision-resistant)
   
   // Price fields (optional, based on tick type)
   optional double p = 10;   // price (for last/all_last)
@@ -85,6 +87,7 @@ message TickMessage {
 | N/A | `st` | int64 | System timestamp (microseconds since epoch) |
 | `contract_id` | `cid` | int32 | IB contract identifier |
 | `tick_type` | `tt` | string | Tick type: "bid_ask", "last", "all_last", "mid_point" |
+| N/A | `rid` | int32 | Request ID (hash-generated from contract+tick_type+time) |
 
 ### Price Fields (conditional)
 | Legacy Field | Optimized | Type | Tick Types | Description |
@@ -110,18 +113,48 @@ message TickMessage {
 ```python
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
+import hashlib
 import time
 import json
 
+def generate_request_id(contract_id: int, tick_type: str, request_time: Optional[int] = None) -> int:
+    """
+    Generate collision-resistant request ID from request properties.
+    
+    Args:
+        contract_id: IB contract identifier
+        tick_type: Tick type (bid_ask, last, all_last, mid_point)
+        request_time: Unix timestamp in microseconds (defaults to current time)
+        
+    Returns:
+        32-bit signed integer request ID (safe for IB API)
+    """
+    if request_time is None:
+        request_time = int(time.time() * 1_000_000)
+    
+    # Create deterministic hash input
+    hash_input = f"{contract_id}_{tick_type}_{request_time}".encode('utf-8')
+    
+    # Generate MD5 hash and take first 4 bytes
+    hash_obj = hashlib.md5(hash_input)
+    hash_bytes = hash_obj.digest()[:4]
+    
+    # Convert to signed 32-bit integer (IB API compatible)
+    request_id = int.from_bytes(hash_bytes, byteorder='big', signed=True)
+    
+    # Ensure positive ID for easier debugging
+    return abs(request_id)
+
 @dataclass
 class TickMessage:
-    """Optimized tick message format for storage efficiency."""
+    """Optimized tick message format with hash-based request ID tracking."""
     
     # Core fields (always present)
     ts: int          # IB timestamp (microseconds since epoch)  
     st: int          # System timestamp (microseconds since epoch)
     cid: int         # Contract ID
     tt: str          # Tick type
+    rid: int         # Request ID (hash-generated, collision-resistant)
     
     # Price fields (conditional based on tick type)
     p: Optional[float] = None    # price (last/all_last)
@@ -143,7 +176,8 @@ class TickMessage:
             'ts': self.ts,
             'st': self.st, 
             'cid': self.cid,
-            'tt': self.tt
+            'tt': self.tt,
+            'rid': self.rid
         }
         
         # Add optional fields only if they have meaningful values
@@ -165,6 +199,7 @@ class TickMessage:
             st=data['st'], 
             cid=data['cid'],
             tt=data['tt'],
+            rid=data['rid'],
             p=data.get('p'),
             s=data.get('s'),
             bp=data.get('bp'),
@@ -175,6 +210,23 @@ class TickMessage:
             bpl=data.get('bpl'),
             aph=data.get('aph'),
             upt=data.get('upt')
+        )
+    
+    @classmethod
+    def create_from_tick_data(cls, contract_id: int, tick_type: str, 
+                             tick_data: Dict[str, Any], request_time: int = None) -> 'TickMessage':
+        """Factory method to create TickMessage with generated request_id."""
+        
+        request_id = generate_request_id(contract_id, tick_type, request_time)
+        timestamp_us = int(time.time() * 1_000_000)
+        
+        return cls(
+            ts=tick_data.get('unix_time', timestamp_us),
+            st=timestamp_us,
+            cid=contract_id,
+            tt=tick_type,
+            rid=request_id,
+            **_map_tick_data_fields(tick_data, tick_type)
         )
 ```
 
@@ -187,12 +239,12 @@ class TickMessage:
 {"type":"tick","stream_id":"711280073_bid_ask_1753837234776_8114","timestamp":"2025-07-30T01:07:14.776Z","data":{"contract_id":711280073,"tick_type":"bid_ask","type":"bid_ask","timestamp":"2025-07-30 01:07:14 UTC","unix_time":1753837634776000,"bid_price":23477.5,"ask_price":23478.0,"bid_size":6.0,"ask_size":5.0,"bid_past_low":false,"ask_past_high":false},"metadata":{"source":"stream_manager","request_id":"12345","contract_id":"711280073","tick_type":"bid_ask"}}
 ```
 
-**Optimized Format (89 bytes)**:
+**Optimized Format (104 bytes)**:
 ```json
-{"ts":1753837634776000,"st":1753837634777542,"cid":711280073,"tt":"bid_ask","bp":23477.5,"ap":23478.0,"bs":6.0,"as":5.0}
+{"ts":1753837634776000,"st":1753837634777542,"cid":711280073,"tt":"bid_ask","rid":1234567890,"bp":23477.5,"ap":23478.0,"bs":6.0,"as":5.0}
 ```
 
-**Storage Reduction**: 134 bytes saved (60% reduction)
+**Storage Reduction**: 119 bytes saved (53% reduction)
 
 ## Implementation Strategy
 
@@ -217,22 +269,30 @@ class TickMessage:
 ## Benefits
 
 ### Storage Efficiency
-- **50-60% size reduction** for JSON storage
-- **40-50% size reduction** for protobuf storage  
+- **50%+ size reduction** for JSON storage (53% in example with request_id)
+- **40%+ size reduction** for protobuf storage  
 - Reduced disk I/O and network transfer costs
 - Faster query performance due to smaller file sizes
+- Minimal overhead (+4 bytes) for collision-resistant request_id tracking
 
 ### Performance Improvements
 - Faster JSON parsing due to shorter field names
 - Reduced memory usage during data processing
 - Improved compression ratios for archived data
-- Faster database imports and exports
+- Faster file system operations with shorter paths
 
 ### Operational Benefits
 - Lower storage infrastructure costs
 - Reduced backup and replication overhead
 - Improved system responsiveness during high-volume periods
 - Better scalability for long-term data retention
+
+### Debugging and Multi-Source Benefits
+- **Collision-Resistant IDs**: Hash-based request_id prevents conflicts across remote systems
+- **TWS Correlation**: Direct mapping between stored data and TWS API logs via request_id
+- **Source Identification**: Request_id ranges can identify data sources (background vs client vs external)
+- **Human-Readable Files**: Filenames immediately show contract, tick_type, and timestamp
+- **Easy Querying**: File organization enables fast filtering by contract and time range
 
 
 ## Testing Strategy
@@ -277,63 +337,100 @@ The optimized TickMessage format eliminates the `metadata` and `stream_id` field
 
 #### 1. StreamManager Modifications (`stream_manager.py`)
 
-**Remove stream_id from storage messages:**
+**Create optimized TickMessage with hash-based request_id:**
 ```python
 def _create_storage_message(self, handler: StreamHandler, tick_data: Dict[str, Any]) -> TickMessage:
-    """Create optimized TickMessage for storage."""
-    timestamp_us = int(time.time() * 1_000_000)
+    """Create optimized TickMessage with hash-based request_id for storage."""
     
-    return TickMessage(
-        ts=tick_data.get('unix_time', timestamp_us),  # Use IB timestamp if available
-        st=timestamp_us,  # System timestamp
-        cid=handler.contract_id,
-        tt=handler.tick_type,
-        # Map tick_data fields to optimized format based on tick_type
-        **_map_tick_data_fields(tick_data, handler.tick_type)
+    return TickMessage.create_from_tick_data(
+        contract_id=handler.contract_id,
+        tick_type=handler.tick_type,
+        tick_data=tick_data,
+        request_time=int(time.time() * 1_000_000)
     )
 ```
 
-**Update StreamHandler to work without stream_id:**
-- Remove `stream_id` parameter from constructor
-- Generate deterministic identifiers from `contract_id + tick_type + request_id` for logging
-- Use `request_id` as primary identifier for stream tracking
+**Update StreamHandler to use hash-based request_id:**
+- Generate collision-resistant request_id using `generate_request_id()`
+- Use request_id for TWS API correlation and debugging
+- Remove dependency on stream_id for internal tracking
+- Enable multi-source debugging via request_id ranges
 
 #### 2. Background Stream Manager (`background_stream_manager.py`)
 
-**Replace stream_id with request_id for tracking:**
+**Replace stream_id with hash-based request_id:**
 ```python
-# Change from:
-stream_id = f"bg_{contract_id}_{tick_type}"
-
-# To: Use request_id directly for internal tracking
-# File organization will be handled by storage layer using contract_id + tick_type
-```
-
-**Update stream creation:**
-```python
-handler = StreamHandler(
-    request_id=request_id,
+# Generate collision-resistant request_id for background streams
+request_id = generate_request_id(
     contract_id=contract_id,
     tick_type=tick_type,
-    # Remove stream_id parameter
+    request_time=int(time.time() * 1_000_000)
+)
+
+# Background streams use request_id ranges (e.g., 60000-69999 range)
+# File organization handled by storage layer using readable filenames
+```
+
+**Update stream creation with hash-based ID:**
+```python
+handler = StreamHandler(
+    request_id=request_id,  # Hash-generated, collision-resistant
+    contract_id=contract_id,
+    tick_type=tick_type,
+    # No stream_id needed - request_id provides debugging correlation
+)
+
+# TWS API uses the hash-generated request_id
+self.tws_app.reqTickByTickData(
+    reqId=request_id,  # Direct correlation with stored data
+    contract=contract_obj,
+    tickType=tws_tick_type,
+    numberOfTicks=0,
+    ignoreSize=False
 )
 ```
 
 #### 3. Storage Layer Updates
 
-**File Organization Strategy:**
-- Replace stream_id-based file paths with `{contract_id}_{tick_type}` pattern
-- Use `cid` and `tt` fields from TickMessage for storage routing
+**Hybrid File Organization Strategy:**
+- Human-readable filenames: `{contract_id}_{tick_type}_{timestamp_seconds}.jsonl`
+- Hash-based request_id stored in message data for debugging/correlation
 - Maintain hourly file rotation using `st` (system timestamp)
+- File organization by contract+tick_type+time for easy querying
 
 **New file path pattern:**
 ```
 storage/
-├── pb/
+├── json/
 │   └── 2025/07/30/14/
-│       ├── 711280073_bid_ask.pb      # Contract + tick type
-│       ├── 711280073_last.pb
-│       └── 412345678_bid_ask.pb
+│       ├── 711280073_bid_ask_1753837634.jsonl    # ES futures bid/ask
+│       ├── 711280073_last_1753837634.jsonl       # ES futures trades
+│       ├── 412345678_bid_ask_1753837635.jsonl    # Different contract
+│       └── 711280073_bid_ask_1753837700.jsonl    # Same contract, later time
+└── pb/
+    └── 2025/07/30/14/
+        ├── 711280073_bid_ask_1753837634.pb
+        ├── 711280073_last_1753837634.pb
+        └── 412345678_bid_ask_1753837635.pb
+```
+
+**Request ID Generation:**
+```python
+from pathlib import Path
+from datetime import datetime, timezone
+
+def get_storage_file_path(base_path: Path, contract_id: int, tick_type: str, timestamp: int) -> Path:
+    """Generate readable file path with contract info and timestamp."""
+    dt = datetime.fromtimestamp(timestamp / 1_000_000, tz=timezone.utc)
+    
+    # Hourly partitioning: YYYY/MM/DD/HH
+    date_path = dt.strftime('%Y/%m/%d/%H')
+    
+    # Readable filename: {contract_id}_{tick_type}_{timestamp_seconds}
+    timestamp_seconds = timestamp // 1_000_000
+    filename = f"{contract_id}_{tick_type}_{timestamp_seconds}.jsonl"
+    
+    return base_path / date_path / filename
 ```
 
 #### 4. WebSocket Manager (`ws_manager.py`)
