@@ -105,8 +105,9 @@ class V3StorageBase(ABC):
         """
         Generate optimized file path for a tick message.
         
-        Uses human-readable format: {contract_id}_{tick_type}_{timestamp_seconds}.ext
+        Uses hour-based granularity: {contract_id}_{tick_type}_{hour_timestamp}.ext
         Organized by hour: YYYY/MM/DD/HH/
+        One file per contract/tick_type/hour for efficient storage and querying.
         
         Args:
             contract_id: IB contract identifier
@@ -116,16 +117,21 @@ class V3StorageBase(ABC):
         Returns:
             Path object for the storage file
         """
-        # Convert microseconds to seconds for filename
+        # Convert microseconds to seconds
         timestamp_seconds = timestamp // 1_000_000
         dt = datetime.fromtimestamp(timestamp_seconds, tz=timezone.utc)
         
         # Hourly partitioning: YYYY/MM/DD/HH
         date_path = dt.strftime('%Y/%m/%d/%H')
         
+        # Hour-based filename (same file for entire hour)
+        # Use hour timestamp (beginning of hour) for consistent grouping
+        hour_dt = dt.replace(minute=0, second=0, microsecond=0)
+        hour_timestamp = int(hour_dt.timestamp())
+        
         # Human-readable filename with extension
         extension = self._get_file_extension()
-        filename = f"{contract_id}_{tick_type}_{timestamp_seconds}.{extension}"
+        filename = f"{contract_id}_{tick_type}_{hour_timestamp}.{extension}"
         
         return self.storage_path / date_path / filename
     

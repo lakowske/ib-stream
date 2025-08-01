@@ -131,17 +131,26 @@ class TickMessage:
     
     @classmethod
     def create_from_tick_data(cls, contract_id: int, tick_type: str, 
-                             tick_data: Dict[str, Any], request_time: Optional[int] = None) -> 'TickMessage':
+                             tick_data: Dict[str, Any], request_time: Optional[int] = None,
+                             request_id: Optional[int] = None) -> 'TickMessage':
         """
-        Factory method to create TickMessage from v2 tick data with generated request_id.
+        Factory method to create TickMessage from v2 tick data with request_id.
         
         This method converts existing v2 formatted tick data into the optimized v3 format,
         mapping the long field names to shortened versions and applying conditional logic.
+        
+        Args:
+            contract_id: IB contract identifier
+            tick_type: Tick type string
+            tick_data: Dictionary with tick data fields
+            request_time: Unix timestamp for hash generation (used if request_id not provided)
+            request_id: Explicit request ID to use (overrides hash generation)
         """
-        if request_time is None:
-            request_time = int(time.time() * 1_000_000)
-            
-        request_id = generate_request_id(contract_id, tick_type, request_time)
+        if request_id is None:
+            # Generate hash-based request ID
+            if request_time is None:
+                request_time = int(time.time() * 1_000_000)
+            request_id = generate_request_id(contract_id, tick_type, request_time)
         
         # Extract system timestamp (current time in microseconds)
         system_timestamp = int(time.time() * 1_000_000)
@@ -291,11 +300,24 @@ def create_tick_message_from_v2(v2_message: Dict[str, Any]) -> Optional[TickMess
         if not contract_id or not tick_type:
             logger.warning("Missing contract_id or tick_type in v2 message")
             return None
+        
+        # Try to preserve original request_id from v2 message (e.g., from background streams)
+        original_request_id = metadata.get('request_id')
+        use_request_id = None
+        if original_request_id:
+            try:
+                # For background streams or other messages with consistent request IDs,
+                # preserve the original request ID to maintain consistency
+                use_request_id = int(original_request_id)
+            except (ValueError, TypeError):
+                # Fall back to hash generation if original ID is invalid
+                use_request_id = None
             
         return TickMessage.create_from_tick_data(
             contract_id=contract_id,
             tick_type=tick_type,
-            tick_data=data
+            tick_data=data,
+            request_id=use_request_id
         )
         
     except Exception as e:

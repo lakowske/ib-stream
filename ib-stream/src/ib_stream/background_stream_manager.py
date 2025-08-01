@@ -160,7 +160,7 @@ class BackgroundStreamManager:
     
     def _is_connected(self) -> bool:
         """Check if TWS connection is active"""
-        return self.tws_app is not None and self.tws_app.isConnected() and self.tws_app.connected
+        return self.tws_app is not None and self.tws_app.is_connected()
     
     async def _handle_disconnection(self) -> None:
         """Handle TWS disconnection by cleaning up streams"""
@@ -193,13 +193,17 @@ class BackgroundStreamManager:
             
             # Create StreamingApp with background-specific client ID
             from ib_util import ConnectionConfig
+            from .config import create_config
+            
+            # Use the same connection configuration as the main service
+            main_config = create_config()
             
             # Use a different client ID for background streaming to avoid conflicts
             background_config = ConnectionConfig(
-                host="127.0.0.1",  # TODO: Should use same config as main service
-                ports=[7497, 7496, 4002, 4001],
-                client_id=10,  # Different from main server client ID
-                connection_timeout=15
+                host=main_config.host,
+                ports=main_config.ports,
+                client_id=main_config.client_id + 1000,  # Offset to avoid conflicts
+                connection_timeout=main_config.connection_timeout
             )
             
             self.tws_app = StreamingApp(json_output=True, config=background_config)
