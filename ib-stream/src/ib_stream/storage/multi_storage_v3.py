@@ -400,13 +400,18 @@ class MultiStorageV3:
         # Add per-storage info
         info['storage_details'] = {}
         for name, storage in self.storages.items():
-            if hasattr(storage, 'get_storage_stats'):  # v3 storages
+            if hasattr(storage, 'get_storage_stats'):  # Both v2 and v3 storages
                 try:
-                    info['storage_details'][name] = await storage.get_storage_stats()
+                    # Check if the method is async (v3 storages) or sync (v2 storages)
+                    import asyncio
+                    if asyncio.iscoroutinefunction(storage.get_storage_stats):
+                        info['storage_details'][name] = await storage.get_storage_stats()
+                    else:
+                        info['storage_details'][name] = storage.get_storage_stats()
                 except Exception as e:
                     logger.warning(f"Failed to get stats for {name}: {e}")
                     info['storage_details'][name] = {'error': str(e)}
-            else:  # v2 storages
+            else:  # Fallback for storages without stats method
                 info['storage_details'][name] = {
                     'type': storage.__class__.__name__,
                     'path': str(getattr(storage, 'storage_path', 'unknown'))
@@ -441,7 +446,13 @@ class MultiStorageV3:
             # Get stats from all storage backends
             for name, storage in self.storages.items():
                 if hasattr(storage, 'get_storage_stats'):
-                    stats = await storage.get_storage_stats()
+                    # Check if the method is async (v3 storages) or sync (v2 storages)
+                    import asyncio
+                    if asyncio.iscoroutinefunction(storage.get_storage_stats):
+                        stats = await storage.get_storage_stats()
+                    else:
+                        stats = storage.get_storage_stats()
+                    
                     size_mb = stats.get('total_size_mb', 0)
                     
                     comparison['by_format'][name] = {
