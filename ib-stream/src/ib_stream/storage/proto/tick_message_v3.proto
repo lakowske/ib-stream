@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package ib_stream.v3;
+
+// Optimized TickMessage for v3 storage format
+// Reduces storage size by 40%+ through optional fields and shortened names
+message TickMessage {
+  // Core fields (always present)
+  int64 ts = 1;          // timestamp (microseconds since epoch)
+  int64 st = 2;          // system_timestamp (microseconds since epoch)
+  int32 cid = 3;         // contract_id
+  string tt = 4;         // tick_type
+  int32 rid = 5;         // request_id (hash-generated, collision-resistant)
+  
+  // Price fields (optional, based on tick type)
+  optional double p = 10;   // price (for last/all_last)
+  optional double s = 11;   // size (for last/all_last)
+  optional double bp = 12;  // bid_price
+  optional double bs = 13;  // bid_size
+  optional double ap = 14;  // ask_price
+  optional double as = 15;  // ask_size
+  optional double mp = 16;  // mid_point
+  
+  // Boolean flags (optional, omitted when false/default)
+  optional bool bpl = 20;   // bid_past_low
+  optional bool aph = 21;   // ask_past_high
+  optional bool upt = 22;   // unreported
+}

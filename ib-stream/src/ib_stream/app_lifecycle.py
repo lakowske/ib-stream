@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from .config import create_config
 from .storage import MultiStorage
+from .storage.multi_storage_v3 import MultiStorageV3
 from .streaming_app import StreamingApp
 from .stream_manager import stream_manager
 from .background_stream_manager import BackgroundStreamManager
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 config = create_config()
 tws_app: Optional[StreamingApp] = None
 tws_lock = threading.Lock()
-storage: Optional[MultiStorage] = None
+storage: Optional[MultiStorageV3] = None
 background_manager: Optional[BackgroundStreamManager] = None
 active_streams = {}
 stream_lock = threading.Lock()
@@ -76,10 +77,12 @@ async def lifespan(_):
         logger.info("  PostgreSQL enabled: %s", config.storage.enable_postgres_index)
         
         try:
-            storage = MultiStorage(
+            storage = MultiStorageV3(
                 storage_path=config.storage.storage_base_path,
-                enable_json=config.storage.enable_json,
-                enable_protobuf=config.storage.enable_protobuf,
+                enable_v2_json=config.storage.enable_json,
+                enable_v2_protobuf=config.storage.enable_protobuf,
+                enable_v3_json=True,  # Enable v3 JSON storage by default
+                enable_v3_protobuf=True,  # Enable v3 Protobuf storage by default
                 enable_metrics=config.storage.enable_metrics
             )
             await storage.start()

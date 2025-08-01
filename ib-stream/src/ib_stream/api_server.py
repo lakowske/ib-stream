@@ -15,6 +15,7 @@ from .endpoints.buffer import setup_buffer_endpoints
 from .endpoints.streaming import setup_streaming_endpoints
 from .endpoints.websocket import setup_websocket_endpoints
 from .endpoints.management import setup_management_endpoints
+from .endpoints.v3 import setup_v3_endpoints
 
 # Configure logging
 app_state = get_app_state()
@@ -42,6 +43,7 @@ setup_buffer_endpoints(app, config)
 setup_streaming_endpoints(app, config)
 setup_websocket_endpoints(app)
 setup_management_endpoints(app, config)
+setup_v3_endpoints(app, config)
 
 
 @app.get("/")
@@ -71,6 +73,11 @@ async def root():
             "/v2/buffer/{contract_id}/stats": "Buffer statistics for contract",
             "/stream/info": "Available tick types and streaming capabilities",
             "/v2/info": "V2 protocol information",
+            "/v3/info": "V3 optimized format information (50%+ storage reduction)",
+            "/v3/buffer/{contract_id}/info": "V3 buffer information with optimization stats",
+            "/v3/buffer/{contract_id}/query": "Query v3 optimized buffer data",
+            "/v3/storage/stats": "V3 storage statistics and v2 comparison",
+            "/v3/storage/files/{contract_id}": "List v3 storage files for contract",
             "/stream/active": "List currently active streams",
             "DELETE /stream/{contract_id}": "Stop all streams for a specific contract",
             "DELETE /stream/all": "Stop all active streams",
