@@ -128,6 +128,18 @@ class MultiStorageV3:
             
         logger.info("MultiStorageV3 system stopped")
         
+    async def store_message(self, message: Dict[str, Any]) -> None:
+        """
+        Backwards compatibility method that delegates to store_v2_message.
+        
+        This maintains interface compatibility with existing code that expects
+        the original MultiStorage.store_message() method.
+        
+        Args:
+            message: Stream message in v2 protocol format
+        """
+        await self.store_v2_message(message)
+    
     async def store_v2_message(self, message: Dict[str, Any]) -> None:
         """
         Store a v2 protocol message to both v2 and v3 storage formats.
@@ -372,7 +384,7 @@ class MultiStorageV3:
         else:
             raise NotImplementedError(f"Query not implemented for {storage_format}")
     
-    def get_storage_info(self) -> Dict[str, Any]:
+    async def get_storage_info(self) -> Dict[str, Any]:
         """Get comprehensive information about all storage backends."""
         info = {
             'enabled_formats': list(self.storages.keys()),
@@ -389,12 +401,24 @@ class MultiStorageV3:
         info['storage_details'] = {}
         for name, storage in self.storages.items():
             if hasattr(storage, 'get_storage_stats'):  # v3 storages
-                info['storage_details'][name] = asyncio.create_task(storage.get_storage_stats())
+                try:
+                    info['storage_details'][name] = await storage.get_storage_stats()
+                except Exception as e:
+                    logger.warning(f"Failed to get stats for {name}: {e}")
+                    info['storage_details'][name] = {'error': str(e)}
             else:  # v2 storages
                 info['storage_details'][name] = {
                     'type': storage.__class__.__name__,
                     'path': str(getattr(storage, 'storage_path', 'unknown'))
                 }
+        
+        # Add storage comparison
+        try:
+            comparison = await self.get_storage_comparison()
+            info['storage_comparison'] = comparison
+        except Exception as e:
+            logger.warning(f"Failed to get storage comparison: {e}")
+            info['storage_comparison'] = {'error': str(e)}
         
         return info
     

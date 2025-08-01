@@ -280,8 +280,13 @@ def create_tick_message_from_v2(v2_message: Dict[str, Any]) -> Optional[TickMess
         data = v2_message.get('data', {})
         metadata = v2_message.get('metadata', {})
         
-        contract_id = data.get('contract_id')
-        tick_type = data.get('tick_type')
+        # Try to get contract_id and tick_type from metadata first, then data
+        contract_id = metadata.get('contract_id') or data.get('contract_id')
+        tick_type = metadata.get('tick_type') or data.get('tick_type')
+        
+        # Convert string IDs to integers
+        if isinstance(contract_id, str):
+            contract_id = int(contract_id)
         
         if not contract_id or not tick_type:
             logger.warning("Missing contract_id or tick_type in v2 message")

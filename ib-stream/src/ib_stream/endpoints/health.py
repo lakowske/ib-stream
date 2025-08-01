@@ -38,13 +38,13 @@ def setup_health_endpoints(app, config):
 
             storage_status = None
             if storage:
-                storage_info = storage.get_storage_info()
-                storage_metrics = storage.get_metrics()
+                storage_info = await storage.get_storage_info()
                 storage_status = {
                     "enabled": True,
                     "formats": storage_info.get('enabled_formats', []),
                     "queue_sizes": storage_info.get('queue_sizes', {}),
-                    "health": storage_metrics.get('health', {}) if storage_metrics else {}
+                    "message_stats": storage_info.get('message_stats', {}),
+                    "storage_info": storage_info
                 }
             else:
                 storage_status = {"enabled": False}
