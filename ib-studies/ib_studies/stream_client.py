@@ -34,13 +34,13 @@ class StreamClient:
         
         # Build v2 URL - single tick type or multi-stream
         if len(tick_types) == 1:
-            # Single stream endpoint
+            # Single stream endpoint - fix: add '/live' path segment
             tick_type = normalize_tick_type(tick_types[0])
-            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}/{tick_type}")
+            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}/live/{tick_type}")
             params = {}
         else:
-            # Multi-stream endpoint
-            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}")
+            # Multi-stream endpoint - fix: add '/live' path segment
+            url = urljoin(self.config.base_url, f"/v2/stream/{contract_id}/live")
             params = {
                 "tick_types": ",".join([normalize_tick_type(t) for t in tick_types])
             }

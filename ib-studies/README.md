@@ -5,8 +5,11 @@ Real-time market data analysis using IB-Stream. This project provides tools for 
 ## Features
 
 - **Delta Study**: Measures buying and selling pressure by tracking trades relative to the bid-ask spread
+- **V3 Protocol Support**: Optimized storage format with 65% size reduction and historical data analysis
+- **Historical Analysis**: Query and analyze historical data with time-range support
 - Real-time streaming analysis with configurable time windows
 - Multiple output formats (human-readable and JSON)
+- Protocol selection (v2 for live streaming, v3 for historical analysis)
 - Robust error handling and automatic reconnection
 
 ## Installation
@@ -31,7 +34,7 @@ pip install -e ".[dev]"
 
 ## Usage
 
-### Delta Study
+### Live Streaming Analysis (v2 Protocol)
 
 The delta study tracks buying and selling pressure in real-time:
 
@@ -50,6 +53,40 @@ ib-studies delta --contract 265598 --output delta_data.jsonl
 
 # Use specific tick types
 ib-studies delta --contract 265598 --tick-types Last,AllLast
+```
+
+### Historical Analysis (v3 Protocol)
+
+Analyze historical market data with time-range queries:
+
+```bash
+# Historical delta analysis
+ib-studies historical --contract 711280073 \
+  --start-time "2025-08-01T17:00:00Z" \
+  --end-time "2025-08-01T18:00:00Z" \
+  --study delta
+
+# Different studies on historical data
+ib-studies historical --contract 711280073 \
+  --start-time "2025-08-01T17:00:00Z" \
+  --end-time "2025-08-01T18:00:00Z" \
+  --study vwap --window 300
+
+# V3 protocol information
+ib-studies v3-info
+
+# List available historical files
+ib-studies v3-files --contract 711280073
+```
+
+### Protocol Selection
+
+```bash
+# Use v2 protocol (default for live streaming)
+ib-studies --protocol v2 delta --contract 265598
+
+# Use v3 protocol with buffer support
+ib-studies --protocol v3 delta --contract 711280073 --buffer-duration 2h
 ```
 
 ### Output Formats
@@ -132,6 +169,10 @@ IB-Studies uses an event-driven architecture to process streaming market data:
 3. **Output Formatters**: Presents results in various formats
 
 See [docs/ib-studies-architecture.md](docs/ib-studies-architecture.md) for detailed architecture documentation.
+
+## V3 Protocol Migration
+
+For detailed information about upgrading to v3 protocol and historical analysis features, see the [V3 Migration Guide](docs/v3-migration-guide.md).
 
 ## License
 
