@@ -60,7 +60,7 @@ message TickMessage {
   int64 st = 2;          // system_timestamp (microseconds since epoch)
   int32 cid = 3;         // contract_id
   string tt = 4;         // tick_type
-  int32 rid = 5;         // request_id (hash-generated, collision-resistant)
+  int32 rid = 5;         // request_id (from IB API metadata)
   
   // Price fields (optional, based on tick type)
   optional double p = 10;   // price (for last/all_last)
@@ -87,7 +87,7 @@ message TickMessage {
 | N/A | `st` | int64 | System timestamp (microseconds since epoch) |
 | `contract_id` | `cid` | int32 | IB contract identifier |
 | `tick_type` | `tt` | string | Tick type: "bid_ask", "last", "all_last", "mid_point" |
-| N/A | `rid` | int32 | Request ID (hash-generated from contract+tick_type+time) |
+| `request_id` | `rid` | int32 | IB API request ID (from metadata.request_id) |
 
 ### Price Fields (conditional)
 | Legacy Field | Optimized | Type | Tick Types | Description |
@@ -113,41 +113,12 @@ message TickMessage {
 ```python
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
-import hashlib
 import time
 import json
 
-def generate_request_id(contract_id: int, tick_type: str, request_time: Optional[int] = None) -> int:
-    """
-    Generate collision-resistant request ID from request properties.
-    
-    Args:
-        contract_id: IB contract identifier
-        tick_type: Tick type (bid_ask, last, all_last, mid_point)
-        request_time: Unix timestamp in microseconds (defaults to current time)
-        
-    Returns:
-        32-bit signed integer request ID (safe for IB API)
-    """
-    if request_time is None:
-        request_time = int(time.time() * 1_000_000)
-    
-    # Create deterministic hash input
-    hash_input = f"{contract_id}_{tick_type}_{request_time}".encode('utf-8')
-    
-    # Generate MD5 hash and take first 4 bytes
-    hash_obj = hashlib.md5(hash_input)
-    hash_bytes = hash_obj.digest()[:4]
-    
-    # Convert to signed 32-bit integer (IB API compatible)
-    request_id = int.from_bytes(hash_bytes, byteorder='big', signed=True)
-    
-    # Ensure positive ID for easier debugging
-    return abs(request_id)
-
 @dataclass
 class TickMessage:
-    """Optimized tick message format with hash-based request ID tracking."""
+    """Optimized tick message format with IB API request ID preservation."""
     
     # Core fields (always present)
     ts: int          # IB timestamp (microseconds since epoch)  
@@ -214,10 +185,9 @@ class TickMessage:
     
     @classmethod
     def create_from_tick_data(cls, contract_id: int, tick_type: str, 
-                             tick_data: Dict[str, Any], request_time: int = None) -> 'TickMessage':
-        """Factory method to create TickMessage with generated request_id."""
+                             tick_data: Dict[str, Any], request_id: int) -> 'TickMessage':
+        """Factory method to create TickMessage with IB API request_id."""
         
-        request_id = generate_request_id(contract_id, tick_type, request_time)
         timestamp_us = int(time.time() * 1_000_000)
         
         return cls(
@@ -225,7 +195,7 @@ class TickMessage:
             st=timestamp_us,
             cid=contract_id,
             tt=tick_type,
-            rid=request_id,
+            rid=request_id,  # Use original IB API request_id
             **_map_tick_data_fields(tick_data, tick_type)
         )
 ```
@@ -273,7 +243,7 @@ class TickMessage:
 - **40%+ size reduction** for protobuf storage  
 - Reduced disk I/O and network transfer costs
 - Faster query performance due to smaller file sizes
-- Minimal overhead (+4 bytes) for collision-resistant request_id tracking
+- Direct IB API request_id preservation for debugging and correlation
 
 ### Performance Improvements
 - Faster JSON parsing due to shorter field names
@@ -288,8 +258,8 @@ class TickMessage:
 - Better scalability for long-term data retention
 
 ### Debugging and Multi-Source Benefits
-- **Collision-Resistant IDs**: Hash-based request_id prevents conflicts across remote systems
-- **TWS Correlation**: Direct mapping between stored data and TWS API logs via request_id
+- **IB API Correlation**: Direct preservation of original IB API request_id for TWS log correlation
+- **Debugging Consistency**: Stored data maintains exact request_id from IB API callbacks
 - **Source Identification**: Request_id ranges can identify data sources (background vs client vs external)
 - **Human-Readable Files**: Filenames immediately show contract, tick_type, and timestamp
 - **Easy Querying**: File organization enables fast filtering by contract and time range
@@ -337,52 +307,46 @@ The optimized TickMessage format eliminates the `metadata` and `stream_id` field
 
 #### 1. StreamManager Modifications (`stream_manager.py`)
 
-**Create optimized TickMessage with hash-based request_id:**
+**Create optimized TickMessage with IB API request_id:**
 ```python
 def _create_storage_message(self, handler: StreamHandler, tick_data: Dict[str, Any]) -> TickMessage:
-    """Create optimized TickMessage with hash-based request_id for storage."""
+    """Create optimized TickMessage preserving original IB API request_id."""
     
     return TickMessage.create_from_tick_data(
         contract_id=handler.contract_id,
         tick_type=handler.tick_type,
         tick_data=tick_data,
-        request_time=int(time.time() * 1_000_000)
+        request_id=handler.request_id  # Use original IB API request_id
     )
 ```
 
-**Update StreamHandler to use hash-based request_id:**
-- Generate collision-resistant request_id using `generate_request_id()`
-- Use request_id for TWS API correlation and debugging
+**Update StreamHandler to preserve IB API request_id:**
+- Preserve original IB API request_id from stream handler
+- Maintain direct correlation between stored data and TWS API logs
 - Remove dependency on stream_id for internal tracking
-- Enable multi-source debugging via request_id ranges
+- Enable source identification via original request_id ranges
 
 #### 2. Background Stream Manager (`background_stream_manager.py`)
 
-**Replace stream_id with hash-based request_id:**
+**Use original IB API request_id from background streams:**
 ```python
-# Generate collision-resistant request_id for background streams
-request_id = generate_request_id(
-    contract_id=contract_id,
-    tick_type=tick_type,
-    request_time=int(time.time() * 1_000_000)
-)
-
-# Background streams use request_id ranges (e.g., 60000-69999 range)
+# Background streams maintain their original IB API request_id
+# No modification needed - preserve the original request_id from IB callbacks
 # File organization handled by storage layer using readable filenames
 ```
 
-**Update stream creation with hash-based ID:**
+**Update stream creation to preserve original IB request_id:**
 ```python
 handler = StreamHandler(
-    request_id=request_id,  # Hash-generated, collision-resistant
+    request_id=original_ib_request_id,  # Preserve original IB API request_id
     contract_id=contract_id,
     tick_type=tick_type,
     # No stream_id needed - request_id provides debugging correlation
 )
 
-# TWS API uses the hash-generated request_id
+# TWS API uses the original request_id for correlation
 self.tws_app.reqTickByTickData(
-    reqId=request_id,  # Direct correlation with stored data
+    reqId=handler.request_id,  # Direct correlation with stored data
     contract=contract_obj,
     tickType=tws_tick_type,
     numberOfTicks=0,
@@ -414,7 +378,7 @@ storage/
         └── 412345678_bid_ask_1753837635.pb
 ```
 
-**Request ID Generation:**
+**File Path Generation:**
 ```python
 from pathlib import Path
 from datetime import datetime, timezone

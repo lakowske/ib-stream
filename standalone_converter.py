@@ -8,30 +8,14 @@ It implements the core conversion logic to demonstrate the v2 to v3 migration.
 
 import json
 import time
-import hashlib
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 
 
-def generate_request_id(contract_id: int, tick_type: str, request_time: Optional[int] = None) -> int:
-    """Generate collision-resistant request ID from request properties."""
-    if request_time is None:
-        request_time = int(time.time() * 1_000_000)
-    
-    # Create deterministic hash input
-    hash_input = f"{contract_id}_{tick_type}_{request_time}".encode('utf-8')
-    
-    # Generate MD5 hash and take first 4 bytes
-    hash_obj = hashlib.md5(hash_input)
-    hash_bytes = hash_obj.digest()[:4]
-    
-    # Convert to signed 32-bit integer (IB API compatible)
-    request_id = int.from_bytes(hash_bytes, byteorder='big', signed=True)
-    
-    # Ensure positive ID for easier debugging
-    return abs(request_id)
+# Note: We preserve the original IB API request_id from v2 metadata
+# No hash generation needed - direct preservation maintains TWS correlation
 
 
 @dataclass
@@ -101,11 +85,21 @@ def convert_v2_message_to_v3(v2_message: Dict[str, Any]) -> Optional[TickMessage
             print(f"WARNING: Missing contract_id or tick_type in message")
             return None
         
-        # Generate hash-based request ID
-        system_timestamp = int(time.time() * 1_000_000)
-        request_id = generate_request_id(contract_id, tick_type, system_timestamp)
+        # Use original IB API request_id from v2 metadata
+        original_request_id = metadata.get('request_id')
+        if not original_request_id:
+            print(f"WARNING: No request_id found in metadata")
+            return None
         
-        # Extract IB timestamp from data
+        # Convert to integer if it's a string
+        try:
+            request_id = int(original_request_id)
+        except (ValueError, TypeError):
+            print(f"WARNING: Invalid request_id format: {original_request_id}")
+            return None
+        
+        # Extract IB timestamp from data  
+        system_timestamp = int(time.time() * 1_000_000)
         ib_timestamp = data.get('unix_time', system_timestamp)
         if ib_timestamp < 1_000_000_000_000:
             # Convert from seconds to microseconds if needed

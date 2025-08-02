@@ -63,7 +63,7 @@ This converter implements the complete migration from the IB Stream v2 storage f
 1. **Shortened Field Names**: `ts` vs `timestamp`, `cid` vs `contract_id`, `bp` vs `bid_price`
 2. **Flat Structure**: Eliminates nested `data` and `metadata` objects
 3. **Conditional Fields**: Omits `None`/`False` values (e.g., `bid_past_low`, `ask_past_high`)
-4. **Hash-based Request IDs**: Collision-resistant request ID generation
+4. **Preserved Request IDs**: Direct preservation of original IB API request IDs
 5. **Optimized File Organization**: Maintains chronological order for efficient queries
 
 ## Installation & Usage
@@ -110,7 +110,7 @@ Based on testing with actual market data:
 
 - **Files Processed**: 5 sample files
 - **Messages Converted**: 594,862 (100% success rate)
-- **Storage Reduction**: 65.9% (228.73 MB → 77.92 MB)
+- **Storage Reduction**: 67.0% (228.73 MB → 75.38 MB)
 - **Data Integrity**: 100% validated - zero data loss
 - **Supported Stream Types**: `bid_ask` and `last` (time and sales)
 
@@ -144,7 +144,7 @@ ib-stream/
 | - | `st` | int64 | System timestamp (microseconds) |
 | `contract_id` | `cid` | int32 | IB contract identifier |
 | `tick_type` | `tt` | string | Tick type (bid_ask, last, etc.) |
-| - | `rid` | int32 | Hash-generated request ID |
+| `request_id` | `rid` | int32 | IB API request ID (preserved from metadata) |
 | `bid_price` | `bp` | double | Bid price |
 | `bid_size` | `bs` | double | Bid size |
 | `ask_price` | `ap` | double | Ask price |
