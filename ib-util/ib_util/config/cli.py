@@ -1,8 +1,11 @@
 """
-Configuration management CLI utility.
+Configuration management CLI utility - PROTOTYPE (UNUSED).
 
-Provides commands to manage, validate, and migrate configurations
-across multiple IB services.
+This module contains prototype CLI functionality that was developed during
+the configuration system design phase. The main CLI tool is located at
+the project root as 'ib.py', which provides all the functionality needed.
+
+This module is kept for reference but is not used in production.
 """
 
 import sys

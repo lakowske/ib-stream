@@ -296,8 +296,8 @@ def load_orchestration_config(
         Loaded orchestration configuration
     """
     if config_file and Path(config_file).exists():
-        # TODO: Implement YAML/TOML loading
-        # For now, create default
+        # YAML/TOML loading not implemented yet - using defaults
+        # This feature can be added in future iterations if needed
         pass
     
     # Create default configuration
