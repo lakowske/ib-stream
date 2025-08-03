@@ -49,14 +49,17 @@ def setup_health_endpoints(app, config):
             else:
                 storage_status = {"enabled": False}
 
+            # Get fresh config from app state
+            current_config = app_state['config']
+            
             return {
                 "status": "healthy",
                 "timestamp": datetime.now().isoformat(),
                 "tws_connected": tws_connected,
                 "active_streams": active_stream_count,
                 "storage": storage_status,
-                "max_streams": config.max_concurrent_streams,
-                "client_id": config.client_id,
+                "max_streams": current_config.max_concurrent_streams,
+                "client_id": current_config.client_id,
             }
         except Exception as e:
             logger.error("Health check failed: %s", e)

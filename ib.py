@@ -215,7 +215,12 @@ def get_supervisorctl():
     env['PROJECT_ROOT'] = str(PROJECT_ROOT)
     env['USER'] = os.getenv('USER', 'unknown')
     
-    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
+    # Use production supervisor config if it exists and has running services
+    production_config = PROJECT_ROOT / 'supervisor-production.conf'
+    if production_config.exists():
+        return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor-production.conf'], env)
+    else:
+        return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
 
 
 @services.command()

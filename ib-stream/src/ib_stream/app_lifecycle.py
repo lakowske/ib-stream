@@ -21,7 +21,7 @@ from .background_stream_manager import BackgroundStreamManager
 logger = logging.getLogger(__name__)
 
 # Global state
-config = create_legacy_compatible_config()
+config = None  # Will be loaded in lifespan startup
 tws_app: Optional[StreamingApp] = None
 tws_lock = threading.Lock()
 storage: Optional[MultiStorageV3] = None
@@ -55,7 +55,10 @@ def ensure_tws_connection() -> StreamingApp:
 @asynccontextmanager
 async def lifespan(_):
     """Lifespan event handler for startup/shutdown"""
-    # Startup
+    # Startup - Load configuration with current environment variables
+    global config
+    config = create_legacy_compatible_config()
+    
     logger.info("Starting IB Stream API Server...")
     logger.info("Configuration:")
     logger.info("  Client ID: %d", config.client_id)  
@@ -175,8 +178,52 @@ async def lifespan(_):
         logger.info("TWS connection closed")
 
 
+def update_global_state(storage_obj=None, background_manager_obj=None, tws_app_obj=None):
+    """Update global state variables for health endpoints"""
+    global storage, background_manager, tws_app
+    
+    if storage_obj is not None:
+        storage = storage_obj
+    if background_manager_obj is not None:
+        background_manager = background_manager_obj  
+    if tws_app_obj is not None:
+        tws_app = tws_app_obj
+
+
 def get_app_state():
     """Get current application state for dependency injection"""
+    # Ensure config is loaded if not already done
+    global config
+    if config is None:
+        import os
+        logger.info("=== CONFIG DEBUG: Loading config (first time) ===")
+        logger.info(f"IB_ENVIRONMENT: {os.getenv('IB_ENVIRONMENT', 'NOT_SET')}")
+        logger.info(f"IB_CLIENT_ID: {os.getenv('IB_CLIENT_ID', 'NOT_SET')}")
+        logger.info(f"IB_HOST: {os.getenv('IB_HOST', 'NOT_SET')}")
+        logger.info(f"IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
+        logger.info(f"IB_STREAM_TRACKED_CONTRACTS: {os.getenv('IB_STREAM_TRACKED_CONTRACTS', 'NOT_SET')}")
+        
+        config = create_legacy_compatible_config()
+        
+        logger.info(f"=== CONFIG DEBUG: Config created ===")
+        logger.info(f"Config client_id: {config.client_id}")
+        logger.info(f"Config host: {config.host}")
+        logger.info(f"Config storage enabled: {config.storage.enable_storage}")
+        logger.info(f"Config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
+        logger.info(f"Config tracked contracts: {len(getattr(config.storage, 'tracked_contracts', []))}")
+        logger.info("=== CONFIG DEBUG: End ===")
+    else:
+        # Config already exists - let's force reload it to pick up current env vars
+        import os
+        logger.info("=== CONFIG DEBUG: Reloading existing config ===")
+        logger.info(f"Current IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
+        logger.info(f"Current config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
+        
+        # Force reload
+        config = create_legacy_compatible_config()
+        logger.info(f"Reloaded config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
+        logger.info("=== CONFIG DEBUG: Reload complete ===")
+    
     return {
         'config': config,
         'storage': storage,

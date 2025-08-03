@@ -27,8 +27,9 @@ class IBStreamAPIServer(BaseAPIServer):
     """
     
     def __init__(self):
-        # Get the existing app state and config for compatibility
-        self.app_state = get_app_state()
+        # Force early config loading to ensure all environment variables are available
+        # This ensures storage and background streaming get correct configuration
+        self.app_state = get_app_state()  # This triggers config loading
         self.stream_config = self.app_state['config']
         
         super().__init__(
@@ -49,6 +50,7 @@ class IBStreamAPIServer(BaseAPIServer):
     def setup_endpoints(self):
         """Setup streaming-specific endpoints"""
         # Setup all endpoint modules with the stream config
+        # Note: Health endpoints will get refreshed config in get_app_state()
         setup_health_endpoints(self.app, self.stream_config)
         setup_buffer_endpoints(self.app, self.stream_config)
         setup_streaming_endpoints(self.app, self.stream_config)
@@ -63,6 +65,10 @@ class IBStreamAPIServer(BaseAPIServer):
         from .storage.multi_storage_v3 import MultiStorageV3
         from .stream_manager import stream_manager
         from .background_stream_manager import BackgroundStreamManager
+        
+        # Refresh configuration with current environment variables
+        self.app_state = get_app_state()
+        self.stream_config = self.app_state['config']
         
         self.logger.info("Initializing IB Stream API Server...")
         self.logger.info("Configuration:")
@@ -84,8 +90,9 @@ class IBStreamAPIServer(BaseAPIServer):
             self.logger.info("  PostgreSQL enabled: %s", self.stream_config.storage.enable_postgres_index)
             
             try:
+                from pathlib import Path
                 self.storage = MultiStorageV3(
-                    storage_path=self.stream_config.storage.storage_base_path,
+                    storage_path=Path(self.stream_config.storage.storage_base_path),
                     enable_v2_json=self.stream_config.storage.enable_json,
                     enable_v2_protobuf=self.stream_config.storage.enable_protobuf,
                     enable_v3_json=True,
@@ -150,6 +157,14 @@ class IBStreamAPIServer(BaseAPIServer):
             'background_manager': self.background_manager,
             'tws_app': self.tws_app
         })
+        
+        # Also update global variables for health endpoints
+        from .app_lifecycle import update_global_state
+        update_global_state(
+            storage_obj=self.storage,
+            background_manager_obj=self.background_manager,
+            tws_app_obj=self.tws_app
+        )
     
     async def shutdown(self):
         """Streaming service shutdown logic"""
@@ -255,10 +270,13 @@ class IBStreamAPIServer(BaseAPIServer):
     async def get_health_status(self) -> Dict[str, Any]:
         """Get streaming service health status"""
         try:
+            # Use the instance's app_state which has the updated storage and background_manager
+            storage = self.storage
+            background_manager = self.background_manager  
+            tws_app = self.tws_app
+            
+            # Get global app_state for active streams tracking
             app_state = get_app_state()
-            storage = app_state.get('storage')
-            background_manager = app_state.get('background_manager')
-            tws_app = app_state.get('tws_app')
             active_streams = app_state.get('active_streams', {})
             stream_lock = app_state.get('stream_lock')
             
@@ -336,26 +354,14 @@ def create_app() -> IBStreamAPIServer:
     return IBStreamAPIServer()
 
 
-# Create lifespan context manager for backward compatibility
-def create_lifespan_wrapper(server_instance):
-    """Create a lifespan wrapper that integrates with BaseAPIServer"""
-    from contextlib import asynccontextmanager
-    
-    @asynccontextmanager
-    async def lifespan(app):
-        # Startup is handled by BaseAPIServer
-        yield
-        # Shutdown is handled by BaseAPIServer
-    
-    return lifespan
+# BaseAPIServer automatically handles lifespan management
 
 
 # Global app instance for uvicorn and compatibility
 server_instance = create_app()
 app = server_instance.app
 
-# Create and set the lifespan for compatibility
-app.router.lifespan_context = create_lifespan_wrapper(server_instance)
+# BaseAPIServer handles lifespan automatically - no need to override
 
 
 def main():
