@@ -7,6 +7,7 @@ by 50%+ through shortened field names, conditional fields, and flat message stru
 
 import time
 import logging
+import hashlib
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Union
 from datetime import datetime, timezone
@@ -284,3 +285,36 @@ def create_tick_message_from_v2(v2_message: Dict[str, Any]) -> Optional[TickMess
     except Exception as e:
         logger.error(f"Failed to convert v2 message to TickMessage: {e}")
         return None
+
+
+def generate_request_id(contract_id: int, tick_type: str, timestamp: Optional[int] = None) -> int:
+    """
+    Generate a hash-based request ID for collision-resistant stream identification.
+    
+    This function creates a deterministic hash-based ID that maps contract_id and tick_type
+    to a consistent request ID, allowing for efficient storage and retrieval while
+    avoiding collisions across different contracts and tick types.
+    
+    Args:
+        contract_id: IB contract identifier
+        tick_type: Tick type string ('bid_ask', 'last', 'all_last', 'mid_point')
+        timestamp: Optional timestamp for uniqueness (uses current time if None)
+        
+    Returns:
+        Integer request ID derived from hash (positive 32-bit integer)
+    """
+    if timestamp is None:
+        timestamp = int(time.time())
+    
+    # Create a deterministic string for hashing
+    key_string = f"{contract_id}_{tick_type}_{timestamp // 3600}"  # Hour-based grouping
+    
+    # Generate MD5 hash and convert to integer
+    hash_object = hashlib.md5(key_string.encode())
+    hash_hex = hash_object.hexdigest()
+    
+    # Convert first 8 hex chars to integer (32-bit positive integer)
+    request_id = int(hash_hex[:8], 16) & 0x7FFFFFFF  # Ensure positive
+    
+    logger.debug(f"Generated request_id {request_id} for contract {contract_id}, type {tick_type}")
+    return request_id
