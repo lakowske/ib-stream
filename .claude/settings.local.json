@@ -15,7 +15,8 @@
       "Bash(make:*)",
       "Bash(.venv/bin/pip:*)",
       "Bash(.venv/bin/python:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(IB_ENVIRONMENT=development python ib.py config validate)"
     ],
     "deny": []
   }

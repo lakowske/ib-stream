@@ -31,8 +31,27 @@ class IBConnectionConfig(BaseSettings):
     connection_timeout: int = Field(default=10, description="Connection timeout in seconds")
     reconnect_attempts: int = Field(default=5, description="Number of reconnection attempts")
     
-    model_config = SettingsConfigDict(env_prefix="IB_")
+    model_config = SettingsConfigDict(
+        env_prefix="IB_",
+        # Disable JSON parsing for lists to allow custom parsing
+        env_parse_none_str="null"
+    )
         
+    @field_validator('ports', mode='before')
+    @classmethod
+    def parse_ports(cls, v):
+        """Parse ports from string or list."""
+        if isinstance(v, str):
+            # Handle comma-separated string like "4002,4001"
+            return [int(port.strip()) for port in v.split(',')]
+        elif isinstance(v, int):
+            # Handle single integer
+            return [v]
+        elif isinstance(v, list):
+            # Handle list (ensure all are integers)
+            return [int(port) for port in v]
+        return v
+    
     @field_validator('ports')
     @classmethod
     def validate_ports(cls, v):
