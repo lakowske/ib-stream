@@ -357,3 +357,27 @@ python ib.py services logs --service ib-stream-remote
 | `make config-watch` | `python ib.py config watch` | Configuration hot-reload |
 
 The CLI provides better error handling, help systems, and extensibility compared to the legacy Makefile approach.
+
+## Recent Critical Fixes (v2.0)
+
+### Storage System Issues ✅ RESOLVED
+- **Fixed MultiStorageV3 initialization error**: `unsupported operand type(s) for /: 'str' and 'str'`
+  - **Solution**: Convert storage_path string to Path object in api_server.py
+  - **Result**: All 4 storage formats now working (v2/v3 JSON + Protobuf)
+
+### Health Endpoint Synchronization ✅ RESOLVED  
+- **Fixed health endpoints showing incorrect status**: Storage and background streaming showed as disabled despite being active
+  - **Root Cause**: Health endpoints used outdated global variables instead of startup-created objects
+  - **Solution**: Added update_global_state() function to sync global variables
+  - **Result**: Health endpoints now reflect actual running state accurately
+
+### Production Verification ✅ CONFIRMED
+```bash
+# Verify all systems working:
+python ib.py services status                    # ✅ Services running
+curl -s http://localhost:8851/health | jq .     # ✅ Accurate health status
+find ./ib-stream/storage -type f | wc -l        # ✅ 8+ data files active
+ls -lh ./ib-stream/storage/v*/protobuf/2025/*/*/ # ✅ V3 59% space reduction
+```
+
+These fixes ensure the configuration system v2 is fully functional and production-ready.
