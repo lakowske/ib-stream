@@ -34,13 +34,15 @@ PROJECT_ROOT = Path(__file__).parent
 VENV_PYTHON = PROJECT_ROOT / '.venv' / 'bin' / 'python'
 
 
-def run_command(cmd: List[str], description: str = None, check: bool = True) -> subprocess.CompletedProcess:
+def run_command(cmd: List[str], description: str = None, check: bool = True, cwd: Path = None) -> subprocess.CompletedProcess:
     """Run a command with proper error handling."""
     if description:
         echo(style(f"→ {description}...", fg='yellow'))
     
+    working_dir = cwd or PROJECT_ROOT
+    
     try:
-        result = subprocess.run(cmd, check=check, capture_output=True, text=True, cwd=PROJECT_ROOT)
+        result = subprocess.run(cmd, check=check, capture_output=True, text=True, cwd=working_dir)
         if result.stdout:
             echo(result.stdout)
         return result
@@ -267,8 +269,9 @@ print(f'Storage: {config.storage.enable_storage}')
     ])
     
     echo(style("Testing with sample contract...", fg='yellow'))
-    cmd = f"cd ib-stream && timeout 10s {VENV_PYTHON} -m ib_stream.stream 265598 --number 1 --json"
-    result = run_command(['bash', '-c', cmd], check=False)
+    # Use safe subprocess execution instead of shell command
+    cmd = ['timeout', '10s', str(VENV_PYTHON), '-m', 'ib_stream.stream', '265598', '--number', '1', '--json']
+    result = run_command(cmd, check=False, cwd=PROJECT_ROOT / 'ib-stream')
     
     if result.returncode == 0:
         echo(style("✓ Connection test successful", fg='green'))

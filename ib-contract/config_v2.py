@@ -33,63 +33,17 @@ class ContractConfig:
         logger.info(f"Client ID: {self._base_config.connection.client_id}")
         logger.info(f"Server Port: {self._base_config.server.port}")
     
-    # Properties that maintain backward compatibility with existing code
-    
-    @property
-    def host(self) -> str:
-        """TWS connection host."""
-        return self._base_config.connection.host
-    
-    @property
-    def ports(self) -> list:
-        """TWS connection ports."""
-        return self._base_config.connection.ports
-    
-    @property
-    def client_id(self) -> int:
-        """TWS client ID."""
-        return self._base_config.connection.client_id
-    
-    @property
-    def server_port(self) -> int:
-        """HTTP server port."""
-        return self._base_config.server.port
-    
-    @property
-    def server_host(self) -> str:
-        """HTTP server bind address."""
-        return self._base_config.server.host
-    
-    @property
-    def log_level(self) -> str:
-        """Logging level."""
-        return self._base_config.server.log_level
-    
-    @property
-    def connection_timeout(self) -> int:
-        """Connection timeout in seconds."""
-        return self._base_config.connection.connection_timeout
-    
-    # Access to underlying configuration
-    
-    @property
-    def base_config(self) -> IBBaseConfig:
-        """Access to the underlying IBBaseConfig."""
-        return self._base_config
+    # Contract service properties (common ones inherited from BaseServiceAdapter)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for legacy compatibility."""
-        return {
-            'host': self.host,
-            'ports': self.ports,
-            'client_id': self.client_id,
-            'server_port': self.server_port,
-            'server_host': self.server_host,
-            'log_level': self.log_level,
-            'connection_timeout': self.connection_timeout,
-            'environment': str(self._base_config.environment),
-            'project_root': self._base_config.project_root,
-        }
+        # Get base dictionary from parent class
+        result = super().to_dict()
+        
+        # Add contract-specific fields if needed
+        # (Currently no contract-specific configuration)
+        
+        return result
 
 
 def create_config() -> ContractConfig:

@@ -11,23 +11,23 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
 from ib_util.config import create_compatible_config, IBBaseConfig
+from ib_util.config.service_adapter import BaseServiceAdapter, BaseStorageConfigAdapter
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class StreamConfig:
+class StreamConfig(BaseServiceAdapter):
     """
-    Adapter class that wraps the new IBBaseConfig for ib-stream compatibility.
+    Configuration adapter for ib-stream service.
     
     This maintains the same interface as the legacy configuration while using
-    the new type-safe configuration system underneath.
+    the new type-safe configuration system underneath. Now inherits from
+    BaseServiceAdapter to eliminate code duplication.
     """
     
     def __init__(self, service_name: str = "ib-stream"):
         """Initialize stream configuration using new system."""
-        self._base_config = create_compatible_config(service_name)
-        self._service_name = service_name
+        super().__init__(service_name)
         
         # Log configuration source
         logger.info(f"Stream configuration initialized for {service_name}")
@@ -36,37 +36,7 @@ class StreamConfig:
         logger.info(f"Server Port: {self._base_config.server.port}")
         logger.info(f"Storage Enabled: {self._base_config.storage.enable_storage}")
     
-    # Properties that maintain backward compatibility with existing code
-    
-    @property
-    def host(self) -> str:
-        """TWS connection host."""
-        return self._base_config.connection.host
-    
-    @property
-    def ports(self) -> List[int]:
-        """TWS connection ports."""
-        return self._base_config.connection.ports
-    
-    @property
-    def client_id(self) -> int:
-        """TWS client ID."""
-        return self._base_config.connection.client_id
-    
-    @property
-    def server_port(self) -> int:
-        """HTTP server port."""
-        return self._base_config.server.port
-    
-    @property
-    def server_host(self) -> str:
-        """HTTP server bind address."""
-        return self._base_config.server.host
-    
-    @property
-    def log_level(self) -> str:
-        """Logging level."""
-        return self._base_config.server.log_level
+    # Stream-specific properties (common ones inherited from BaseServiceAdapter)
     
     @property
     def max_concurrent_streams(self) -> int:
@@ -86,51 +56,32 @@ class StreamConfig:
         """Storage configuration."""
         return StorageConfigAdapter(self._base_config.storage)
     
-    # Access to underlying configuration
-    
-    @property
-    def base_config(self) -> IBBaseConfig:
-        """Access to the underlying IBBaseConfig."""
-        return self._base_config
+    # Access to storage configuration
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for legacy compatibility."""
-        return {
-            'host': self.host,
-            'ports': self.ports,
-            'client_id': self.client_id,
-            'server_port': self.server_port,
-            'server_host': self.server_host,
-            'log_level': self.log_level,
+        # Get base dictionary from parent class
+        result = super().to_dict()
+        
+        # Add stream-specific fields
+        result.update({
             'max_concurrent_streams': self.max_concurrent_streams,
             'default_timeout_seconds': self.default_timeout_seconds,
             'storage': self.storage.to_dict(),
-            'environment': str(self._base_config.environment),
-            'project_root': self._base_config.project_root,
-        }
+        })
+        
+        return result
 
 
-class StorageConfigAdapter:
-    """Adapter for storage configuration to maintain backward compatibility."""
+class StorageConfigAdapter(BaseStorageConfigAdapter):
+    """
+    Stream-specific storage configuration adapter.
     
-    def __init__(self, storage_config):
-        self._storage_config = storage_config
+    Extends the base storage adapter with ib-stream specific functionality
+    like tracked contracts and background streaming.
+    """
     
-    @property
-    def enable_storage(self) -> bool:
-        return self._storage_config.enable_storage
-    
-    @property
-    def storage_base_path(self) -> str:
-        return self._storage_config.storage_path
-    
-    @property
-    def enable_json(self) -> bool:
-        return self._storage_config.enable_json
-    
-    @property
-    def enable_protobuf(self) -> bool:
-        return self._storage_config.enable_protobuf
+    # Stream-specific storage properties (common ones inherited from BaseStorageConfigAdapter)
     
     @property
     def enable_postgres_index(self) -> bool:
@@ -184,16 +135,20 @@ class StorageConfigAdapter:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for legacy compatibility."""
-        return {
-            'enable_storage': self.enable_storage,
-            'storage_base_path': self.storage_base_path,
-            'enable_json': self.enable_json,
-            'enable_protobuf': self.enable_protobuf,
+        # Start with base storage configuration
+        result = super().to_dict()
+        
+        # Add stream-specific storage fields
+        result.update({
             'enable_postgres_index': self.enable_postgres_index,
             'enable_metrics': self.enable_metrics,
             'enable_client_stream_storage': self.enable_client_stream_storage,
+            'enable_background_streaming': self.enable_background_streaming,
             'tracked_contracts': [c.to_dict() for c in self.tracked_contracts],
-        }
+            'background_stream_reconnect_delay': self.background_stream_reconnect_delay,
+        })
+        
+        return result
 
 
 @dataclass
