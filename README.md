@@ -1,15 +1,16 @@
 # ib-stream
-A market data streaming server for Interactive Brokers with shared connection utilities and remote gateway support.
+A market data streaming server for Interactive Brokers with modern configuration management and shared connection utilities.
 
 ## Features
 
 - **Real-time market data streaming** via REST API and WebSocket
-- **Contract lookup service** for Interactive Brokers securities
-- **Remote gateway support** for connecting to IB Gateway on different machines
-- **Smart instance allocation** using MD5 path hashing for unique client IDs (100-999) and ports (8000-9000)
+- **Contract lookup service** for Interactive Brokers securities  
+- **Type-safe configuration management** with Pydantic validation and hot-reload
+- **Smart instance allocation** using MD5 path hashing for unique client IDs and ports
 - **Shared connection utilities** via ib-util module for reliable TWS/Gateway connections
 - **Supervisor process management** with automatic restart and logging
-- **Development workflow** with hot reload support
+- **Modern CLI tool** for configuration, services, and development workflows
+- **Development workflow** with configuration hot-reload and testing tools
 
 ## Quick Start
 
@@ -24,45 +25,56 @@ A market data streaming server for Interactive Brokers with shared connection ut
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd ib-stream-1
+cd ib-stream
 
 # Build TWS API and setup environment
 make setup
 
-# Test connection to remote gateway (optional)
-make test-connection
+# Verify setup with the new CLI tool
+python ib.py --help
+```
 
-# Note: Instance-specific configuration is generated automatically when starting services
+### Using the ib.py CLI Tool
+
+The project now uses a modern CLI tool for all configuration and service management:
+
+```bash
+# Configuration Management
+python ib.py config validate              # Validate configuration system
+python ib.py config show                 # Show current configuration
+python ib.py config watch                # Watch for configuration changes
+python ib.py config compare ib-stream ib-contract  # Compare configurations
+
+# Service Management  
+python ib.py services start              # Start all services
+python ib.py services status             # Check service status
+python ib.py services logs               # View service logs
+python ib.py services stop               # Stop all services
+
+# Testing & Validation
+python ib.py test connection             # Test IB Gateway connection
+python ib.py test contract AAPL          # Test contract lookup
+
+# Development Tools
+python ib.py dev setup                   # Development environment setup
+python ib.py dev tools                   # Install development tools
+python ib.py dev clean                   # Clean build artifacts
 ```
 
 ### Starting Services
 
 ```bash
-# Start supervisor with dynamic configuration
+# Start services with the CLI (recommended)
+python ib.py services start
+
+# Or use traditional make command
 make start-supervisor
 
-# Or manually with the startup script
-./start-supervisor.sh
-
 # Check service status (shows your generated ports)
-make supervisor-status
-
-# Start/stop individual services
-make supervisor-start  # Start ib-stream-remote
-make supervisor-stop   # Stop all services
+python ib.py services status
 
 # View real-time logs
-make supervisor-logs   # Follow ib-stream-remote logs
-```
-
-### Development Mode
-
-```bash
-# Start development servers with hot reload
-./supervisor-wrapper.sh start ib-stream-dev
-./supervisor-wrapper.sh start ib-contracts-dev
-
-# Services will auto-reload on code changes using your generated ports
+python ib.py services logs
 ```
 
 ## Architecture
@@ -71,58 +83,121 @@ make supervisor-logs   # Follow ib-stream-remote logs
 
 - **ib-stream/**: Market data streaming service (port determined by project path hash)
 - **ib-contract/**: Contract lookup service (port determined by project path hash)  
-- **ib-util/**: Shared connection utilities and IB API abstractions
-- **generate_instance_config.py**: Smart configuration generator using MD5 path hashing
+- **ib-util/**: Shared connection utilities and configuration management
+- **ib.py**: Modern CLI tool for all operations
+- **Configuration v2**: Type-safe configuration with Pydantic validation
 
-### Configuration
+### Configuration System (v2)
 
-The project uses environment-based configuration with automatic instance-specific value generation:
+The project uses a modern type-safe configuration system with automatic fallback:
+
+#### Configuration Architecture
+- **Type-safe validation** with Pydantic schemas
+- **Environment-specific configurations** (development, production, staging)
+- **Automatic instance isolation** with unique client IDs and ports
+- **Hot-reload capabilities** for development
+- **Backward compatibility** with legacy configuration
 
 #### Configuration Files
-- **Remote Gateway**: `ib-stream/config/remote-gateway.env`
-- **SSH Tunnel**: `ib-stream/config/ssh-tunnel.env` 
-- **Query Only**: `ib-stream/config/query-only.env`
+- **Production**: `ib-stream/config/production.env`
+- **Development**: `ib-stream/config/development.env`
 - **Instance Config**: `ib-stream/config/instance.env` (auto-generated)
+- **Service-specific**: Environment variables per service
 
 #### Dynamic Value Generation
 Instance-specific values are generated automatically using MD5 hash of the project path:
-- **Client IDs**: Range 100-999 (stream_id, stream_id + 1 for contracts)
-- **HTTP Ports**: Range 8000-9000 (base_port, base_port + 10 for contracts)
-- **Configuration Flow**:
-  1. `make start-supervisor` runs `generate_instance_config.py`
-  2. Creates `ib-stream/config/instance.env` with hashed values
-  3. `start-supervisor.sh` loads and exports these as environment variables
-  4. `supervisor.conf` uses `%(ENV_VAR)s` substitution for dynamic values
+- **Client IDs**: Range 100-999 (unique per service)
+- **HTTP Ports**: Range 8000-9000 (unique per service)
+- **ib-stream**: Client ID 851, Port 8851
+- **ib-contract**: Client ID 852, Port 8861
 
 ### Services
 
 #### ib-stream (Market Data)
-- **Endpoint**: `http://localhost:{STREAM_PORT}/` (determined by path hash)
-- **Health**: `http://localhost:{STREAM_PORT}/health`
-- **WebSocket**: `ws://localhost:{STREAM_PORT}/ws/control`
-- **Streaming**: Real-time market data for subscribed contracts
+- **Endpoint**: `http://localhost:8851/` (production server)
+- **Health**: `http://localhost:8851/health`
+- **WebSocket**: `ws://localhost:8851/ws/control`
+- **Features**: Real-time streaming, buffer management, V3 optimized storage
 
 #### ib-contracts (Contract Lookup)
-- **Endpoint**: `http://localhost:{CONTRACTS_PORT}/` (determined by path hash)
-- **Health**: `http://localhost:{CONTRACTS_PORT}/health`
-- **Lookup**: `http://localhost:{CONTRACTS_PORT}/lookup/{symbol}/{type}`
-- **Contract Details**: Full IB contract specifications
+- **Endpoint**: `http://localhost:8861/` (production server)
+- **Health**: `http://localhost:8861/health`
+- **Features**: Contract lookup, symbol resolution, IB contract details
+
+## CLI Usage Examples
+
+### Configuration Management
+
+```bash
+# Validate the entire configuration system
+python ib.py config validate
+
+# Show configuration for all services
+python ib.py config show
+
+# Show detailed configuration for specific service
+python ib.py config show --service ib-stream --format detailed
+
+# Compare configurations between services
+python ib.py config compare ib-stream ib-contract
+
+# Watch for configuration changes (development)
+python ib.py config watch --service ib-stream
+```
+
+### Service Operations
+
+```bash
+# Start services in production mode
+python ib.py services start --environment production
+
+# Check service status and health
+python ib.py services status
+
+# View logs for specific service
+python ib.py services logs --service ib-stream-remote
+
+# Stop all services
+python ib.py services stop
+```
+
+### Testing & Validation
+
+```bash
+# Test connection to IB Gateway
+python ib.py test connection
+
+# Test contract lookup for specific symbols
+python ib.py test contract AAPL
+python ib.py test contract MNQ
+```
+
+### Development Workflow
+
+```bash
+# Set up development environment
+python ib.py dev setup
+
+# Install development tools (linting, testing, etc.)
+python ib.py dev tools
+
+# Start configuration watcher for hot-reload
+python ib.py config watch
+
+# In another terminal, make configuration changes and see live updates
+```
 
 ## API Usage
 
 ### REST Endpoints
 
 ```bash
-# Check your generated ports first
-python generate_instance_config.py
-
-# Use the displayed ports for API calls, or use dynamic discovery:
-# Check service health
-curl http://localhost:$(python -c "from generate_instance_config import generate_instance_config; print(generate_instance_config()['stream_port'])")/health
-curl http://localhost:$(python -c "from generate_instance_config import generate_instance_config; print(generate_instance_config()['contracts_port'])")/health
+# Check service health (production server)
+curl http://localhost:8851/health        # ib-stream health
+curl http://localhost:8861/health        # ib-contracts health
 
 # Look up contract details  
-curl http://localhost:$(python -c "from generate_instance_config import generate_instance_config; print(generate_instance_config()['contracts_port'])")/lookup/AAPL/STK
+curl http://localhost:8861/lookup/AAPL/STK
 
 # Stream market data (CLI)
 cd ib-stream && python -m ib_stream.stream AAPL --number 10
@@ -136,12 +211,8 @@ import websockets
 import json
 
 async def stream_data():
-    # Get your instance's port from configuration
-    from generate_instance_config import generate_instance_config
-    config = generate_instance_config()
-    port = config['stream_port']
-    
-    async with websockets.connect(f'ws://localhost:{port}/ws/control') as ws:
+    # Connect to ib-stream WebSocket (production port)
+    async with websockets.connect('ws://localhost:8851/ws/control') as ws:
         # Get server status
         status = json.loads(await ws.recv())
         print(f"Server status: {status}")
@@ -159,125 +230,156 @@ asyncio.run(stream_data())
 ### Project Structure
 
 ```
-ib-stream-1/
+ib-stream/
 ├── ib-stream/           # Market data streaming service
 ├── ib-contract/         # Contract lookup service  
-├── ib-util/             # Shared connection utilities
-├── Makefile             # Build and setup automation
+├── ib-util/             # Shared utilities and configuration
+├── ib.py                # Modern CLI tool for all operations
+├── Makefile             # Build automation only
 ├── supervisor.conf      # Process management configuration
-├── generate_instance_config.py  # Instance configuration generator
+├── config-*.py          # Configuration analysis tools
 └── logs/                # Service logs
 ```
 
-### Makefile Targets
+### CLI Command Reference
+
+```bash
+# Show all available commands
+python ib.py --help
+
+# Show commands for specific group
+python ib.py config --help
+python ib.py services --help
+python ib.py test --help
+python ib.py dev --help
+
+# Get version information
+python ib.py --version
+```
+
+### Makefile (Build Automation Only)
+
+The Makefile now focuses solely on build automation:
 
 ```bash
 make setup            # Full environment setup
 make build-api        # Build TWS API only
-make venv            # Create virtual environment
-make install         # Install packages
-make test-connection # Test remote gateway connection
-make dev-server      # Start development server
-make clean           # Clean build artifacts
-
-# Supervisor management
-make start-supervisor # Start supervisor with dynamic config
-make supervisor-status # Check status and show generated ports
-make supervisor-start # Start ib-stream-remote service
-make supervisor-stop  # Stop all services
-make supervisor-logs  # Follow service logs
+make install-packages # Install packages in development mode
+make dev-tools        # Install development tools
+make clean            # Clean build artifacts
 ```
+
+**Note**: For service management, configuration, and development workflows, use the `ib.py` CLI tool instead.
 
 ### Remote Gateway Setup
 
 To connect to IB Gateway running on a remote machine:
 
-1. **Configure remote gateway** in `ib-stream/config/remote-gateway.env`:
+1. **Configure in environment file** (`ib-stream/config/production.env`):
    ```bash
    IB_STREAM_HOST=192.168.0.60
-   IB_STREAM_PORTS=4002
-   IB_STREAM_CLIENT_ID=${IB_STREAM_CLIENT_ID:-374}
+   IB_STREAM_PORTS=4002,4001
    ```
 
-2. **Update Gateway settings** on remote machine:
-   - Set `TrustedIPs=0.0.0.0` in Gateway configuration
-   - Ensure API connections are enabled
-   - Use appropriate ports (4002 for Paper Gateway, 4001 for Live)
-
-3. **Test connection**:
+2. **Test connection**:
    ```bash
-   make test-connection
+   python ib.py test connection
    ```
+
+### Configuration Hot-Reload (Development)
+
+The new configuration system supports hot-reload for development:
+
+```bash
+# Start configuration watcher
+python ib.py config watch
+
+# In another terminal, edit configuration files
+# Changes are detected and applied automatically
+vim ib-stream/config/development.env
+```
 
 ### Logging
 
-All services use structured logging with timestamps and context:
+View logs using the CLI tool:
 
 ```bash
-# View supervisor logs directly
+# View logs for all services
+python ib.py services logs
+
+# View logs for specific service
+python ib.py services logs --service ib-stream-remote
+
+# Traditional approach (still works)
+make supervisor-logs
 tail -f /var/log/supervisor/ib-stream-remote-stdout.log
-tail -f /var/log/supervisor/ib-contracts-stdout.log
-
-# View via supervisor (with dynamic config loading)
-make supervisor-logs                # Follow ib-stream-remote logs
-./supervisor-wrapper.sh tail -f ib-contracts
-./supervisor-wrapper.sh tail -f ib-stream-remote stderr
 ```
-
-### Development Workflow
-
-1. **Start services**: `make start-supervisor`
-2. **Check status**: `make supervisor-status` (shows your generated ports)
-3. **Make code changes** in your editor
-4. **Services auto-reload** if running in development mode (`--reload` flag)
-5. **Check logs**: `make supervisor-logs` or `./supervisor-wrapper.sh tail -f <service-name>`
-6. **Test endpoints** using curl or WebSocket clients with your generated ports
-7. **Stop services**: `make supervisor-stop` when done
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Connection Failed**
-- Verify IB Gateway/TWS is running
-- Check API settings are enabled  
-- Confirm correct host and port configuration
-- Verify client ID is not in use by another application
+**Configuration Problems**
+```bash
+# Validate entire configuration system
+python ib.py config validate
 
-**Port Conflicts**
-- Ports are generated per-instance using path hash
-- Check `make supervisor-status` for actual port assignments
-- Different project locations will get different ports automatically
+# Show detailed configuration
+python ib.py config show --format detailed
 
-**Service Won't Start**
-- Check supervisor logs: `./supervisor-wrapper.sh tail <service> stderr`
-- Verify virtual environment: `which python` should show `.venv/bin/python`
-- Ensure TWS API is built: `make build-api`
-- Regenerate config: `python generate_instance_config.py`
+# Compare service configurations for differences
+python ib.py config compare ib-stream ib-contract
+```
+
+**Connection Issues**
+```bash
+# Test IB Gateway connection
+python ib.py test connection
+
+# Check service status
+python ib.py services status
+
+# View service logs for errors
+python ib.py services logs
+```
+
+**Service Problems**
+```bash
+# Check if services are running
+python ib.py services status
+
+# Restart services
+python ib.py services stop
+python ib.py services start
+
+# View detailed logs
+python ib.py services logs --service ib-stream-remote
+```
 
 ### Debug Mode
 
-Run services directly for detailed debugging:
+For detailed debugging, you can still run services directly:
 
 ```bash
 # Debug ib-stream
 cd ib-stream && python -m ib_stream.api_server
 
 # Debug ib-contracts  
-cd ib-contract && python -m api_server
+cd ib-contract && python api_server.py
 
-# Test connection manually
-python test_real_ib_connection.py
+# Debug configuration
+python ib.py config validate --verbose
 ```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make changes following the existing code style
-4. Add tests for new functionality
-5. Update documentation as needed
-6. Submit a pull request
+3. Use the CLI tool for development: `python ib.py dev setup`
+4. Make changes following the existing code style
+5. Test with: `python ib.py test connection`
+6. Update documentation as needed
+7. Submit a pull request
 
 ## License
 

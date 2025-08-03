@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bd start:*)",
+      "Bash(bd logs:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash($VIRTUAL_ENV/bin/bd logs:*)",
+      "Bash($VIRTUAL_ENV/bin/bd:*)",
+      "Bash($VIRTUAL_ENV/bin/pip install:*)",
+      "Bash(curl:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(kill:*)",
+      "Bash(make:*)",
+      "Bash(.venv/bin/pip:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": []
+  }
+}
