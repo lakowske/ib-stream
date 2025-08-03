@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from .config import create_config
+from .config_v2 import create_legacy_compatible_config
 from .storage import MultiStorage
 from .storage.multi_storage_v3 import MultiStorageV3
 from .streaming_app import StreamingApp
@@ -21,7 +21,7 @@ from .background_stream_manager import BackgroundStreamManager
 logger = logging.getLogger(__name__)
 
 # Global state
-config = create_config()
+config = create_legacy_compatible_config()
 tws_app: Optional[StreamingApp] = None
 tws_lock = threading.Lock()
 storage: Optional[MultiStorageV3] = None

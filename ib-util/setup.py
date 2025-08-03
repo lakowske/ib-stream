@@ -12,6 +12,11 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "ibapi>=9.81.1",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "python-dotenv>=1.0.0",
+        "pyyaml>=6.0",
+        "click>=8.0.0",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

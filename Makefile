@@ -14,22 +14,49 @@ YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
 
-.PHONY: help setup clean build-api install-packages test-connection
+.PHONY: help setup clean build-api install-packages test-connection dev-tools
 
 help:
 	@echo "IB-Stream Development Environment"
 	@echo "================================="
 	@echo ""
-	@echo "Available targets:"
-	@echo "  setup           - Full development environment setup"
-	@echo "  build-api       - Build and install TWS API from contrib/"
-	@echo "  install-packages - Install ib-util and ib-stream packages in development mode"
-	@echo "  test-connection  - Test connection to remote gateway (requires running gateway)"
-	@echo "  clean           - Clean up virtual environment and build artifacts"
+	@echo "Core Setup:"
+	@echo "  setup              - Full development environment setup"
+	@echo "  build-api          - Build and install TWS API from contrib/"
+	@echo "  install-packages   - Install ib-util and ib-stream packages in development mode"
+	@echo "  dev-tools          - Install development tools (ruff, pytest, click)"
+	@echo "  clean              - Clean up virtual environment and build artifacts"
+	@echo ""
+	@echo "New Configuration System (v2):"
+	@echo "  config-validate       - Validate new configuration system"
+	@echo "  config-show           - Show current configuration for both services"
+	@echo "  config-test-new-system - End-to-end test of new configuration"
+	@echo "  test-connection-v2    - Test connection using new configuration"
+	@echo "  contract-lookup-v2    - Test contract lookup with new configuration"
+	@echo "  start-supervisor-v2   - Start supervisor with new configuration"
+	@echo ""
+	@echo "Supervisor Management:"
+	@echo "  start-supervisor      - Start supervisor with instance configuration"
+	@echo "  supervisor-status     - Show supervisor and instance status"
+	@echo "  supervisor-logs       - Follow ib-stream-remote logs"
+	@echo "  supervisor-stop       - Stop all services"
+	@echo "  stop-supervisor       - Stop supervisor daemon"
+	@echo ""
+	@echo "Advanced Features:"
+	@echo "  config-watch          - Watch all configuration files for changes (hot-reload)"
+	@echo "  config-watch-stream   - Watch ib-stream configuration only"
+	@echo "  config-watch-contract - Watch ib-contract configuration only"
+	@echo "  config-diff           - Configuration comparison and analysis tool"
+	@echo "  config-diff-summary   - Show configuration summary for all services"
+	@echo "  config-diff-compare   - Compare ib-stream vs ib-contract configurations"
+	@echo ""
+	@echo "Legacy Targets (deprecated):"
+	@echo "  test-connection-legacy - Test connection using legacy configuration"
+	@echo "  start-production-legacy - Start production using old system"
 	@echo ""
 	@echo "Configuration:"
-	@echo "  Remote gateway configuration is in ib-stream/config/remote-gateway.env"
-	@echo "  Modify IB_STREAM_HOST=192.168.0.60 to change the target host"
+	@echo "  New system uses ib-stream/config/*.env files with type-safe validation"
+	@echo "  Instance configuration is auto-generated to avoid port/client ID conflicts"
 
 setup: $(VENV_DIR) build-api install-packages
 	@echo -e "$(GREEN)✓ Development environment setup complete!$(NC)"
@@ -161,7 +188,126 @@ stop-supervisor:
 	@echo -e "$(YELLOW)Stopping supervisor...$(NC)"
 	./supervisor-wrapper.sh shutdown
 
+# Production server configuration targets
+start-production: 
+	@echo -e "$(YELLOW)Starting production server configuration...$(NC)"
+	@echo "This will run ib-stream on the production server with localhost TWS connection"
+	@echo "and full storage enabled for continuous market data recording."
+	@echo ""
+	./start-production.sh
+
+test-production-connection:
+	@echo -e "$(YELLOW)Testing production server connection (localhost)...$(NC)"
+	@echo "Configuration: localhost on port 4002"
+	@echo ""
+	cd ib-stream && \
+	export IB_STREAM_ENV=production-server && \
+	$(VENV_PYTHON) -c "from src.ib_stream.config import create_config; config = create_config(); print(f'Host: {config.host}'); print(f'Ports: {config.ports}'); print(f'Storage: {config.storage.enable_storage}')" && \
+	echo -e "$(YELLOW)Testing with a sample contract:$(NC)" && \
+	timeout 10s $(VENV_PYTHON) -m ib_stream.stream 265598 --number 1 --json || echo -e "$(RED)Connection failed - check local TWS Gateway$(NC)"
+
+production-status:
+	@echo -e "$(YELLOW)Production Server Status:$(NC)"
+	@echo "Server: 192.168.0.60 (localhost connection)"
+	@echo "Environment: production-server"
+	@echo ""
+	make supervisor-status
+	@echo ""
+	@echo -e "$(YELLOW)Storage status:$(NC)"
+	@ls -la storage/ 2>/dev/null | head -5 || echo "Storage directory not found"
+
 # Install just the development tools
 dev-tools: $(VENV_DIR)
-	$(VENV_PIP) install ruff pytest pytest-cov
+	$(VENV_PIP) install ruff pytest pytest-cov click watchdog
 	@echo -e "$(GREEN)✓ Development tools installed$(NC)"
+
+# New Configuration Management System (v2)
+.PHONY: config-validate config-show config-test-new-system config-migrate test-connection-v2 contract-lookup-v2 start-supervisor-v2 config-watch config-watch-stream config-watch-contract config-diff config-diff-summary config-diff-compare
+
+config-validate: dev-tools
+	@echo -e "$(YELLOW)Validating new configuration system...$(NC)"
+	$(VENV_PYTHON) -c "from ib_util.config.compat import validate_migration; import json; result = validate_migration(); print(json.dumps(result, indent=2)); exit(0 if result['valid'] else 1)"
+
+config-show: dev-tools  
+	@echo -e "$(YELLOW)Current configuration (new system):$(NC)"
+	@echo ""
+	@echo "ib-stream configuration:"
+	$(VENV_PYTHON) -c "from ib_stream.config_v2 import create_config; config = create_config(); print(f'  Host: {config.host}'); print(f'  Client ID: {config.client_id}'); print(f'  Server Port: {config.server_port}'); print(f'  Storage: {config.storage.enable_storage}')"
+	@echo ""
+	@echo "ib-contract configuration:"
+	$(VENV_PYTHON) ib-contract/config_v2.py | grep -E "(Host:|Client ID:|Server Port:)" | sed 's/^/  /'
+
+config-test-new-system: dev-tools
+	@echo -e "$(YELLOW)Testing new configuration system end-to-end...$(NC)"
+	@echo ""
+	@echo "1. Testing ib-stream configuration:"
+	cd ib-stream && $(PWD)/$(VENV_PYTHON) -c "from src.ib_stream.app_lifecycle import get_app_state; app_state = get_app_state(); config = app_state['config']; print(f'  ✓ Host: {config.host}'); print(f'  ✓ Client ID: {config.client_id}'); print(f'  ✓ Server Port: {config.server_port}'); print(f'  ✓ Storage: {config.storage.enable_storage}'); print(f'  ✓ Tracked Contracts: {len(config.storage.tracked_contracts) if hasattr(config.storage, \"tracked_contracts\") and config.storage.tracked_contracts else 0}')"
+	@echo ""
+	@echo "2. Testing ib-contract configuration:"
+	$(VENV_PYTHON) ib-contract/config_v2.py | head -8 | grep -E "(Service:|Host:|Client ID:|Server Port:)" | sed 's/^/  ✓ /'
+	@echo ""
+	@echo -e "$(GREEN)✓ New configuration system is working correctly!$(NC)"
+
+# Updated targets that use the new configuration system
+test-connection-v2: dev-tools
+	@echo -e "$(YELLOW)Testing connection with new configuration system...$(NC)"
+	@echo "Using production server configuration (localhost on port 4002)"
+	@echo ""
+	cd ib-stream && \
+	$(PWD)/$(VENV_PYTHON) -c "from src.ib_stream.app_lifecycle import get_app_state; app_state = get_app_state(); config = app_state['config']; print(f'Host: {config.host}'); print(f'Ports: {config.ports}'); print(f'Client ID: {config.client_id}'); print(f'Storage: {config.storage.enable_storage}')" && \
+	echo -e "$(YELLOW)Testing with a sample contract (this will fail if gateway is not running):$(NC)" && \
+	timeout 10s $(PWD)/$(VENV_PYTHON) -m ib_stream.stream 265598 --number 1 --json || echo -e "$(RED)Connection failed - make sure IB Gateway is running locally$(NC)"
+
+contract-lookup-v2: dev-tools
+	@echo -e "$(YELLOW)Testing contract lookup with new configuration...$(NC)"
+	$(VENV_PYTHON) ib-contract/contract_lookup.py AAPL
+
+# Supervisor management with new configuration
+start-supervisor-v2: install-supervisor generate-instance-config
+	@echo -e "$(YELLOW)Starting supervisor with new configuration system...$(NC)"
+	@echo "This uses the new configuration compatibility layer"
+	./start-supervisor.sh
+
+# Advanced Features
+config-watch: dev-tools
+	@echo -e "$(YELLOW)Starting configuration hot-reload watcher...$(NC)"
+	@echo "Edit .env files in ib-stream/config/ to see real-time configuration changes"
+	@echo "Press Ctrl+C to stop watching"
+	@echo ""
+	$(VENV_PYTHON) config-watch.py
+
+config-watch-stream: dev-tools
+	@echo -e "$(YELLOW)Watching ib-stream configuration only...$(NC)"
+	$(VENV_PYTHON) config-watch.py --service ib-stream
+
+config-watch-contract: dev-tools
+	@echo -e "$(YELLOW)Watching ib-contract configuration only...$(NC)"
+	$(VENV_PYTHON) config-watch.py --service ib-contract
+
+config-diff: dev-tools
+	@echo -e "$(YELLOW)Configuration comparison and analysis tool$(NC)"
+	@echo "Usage examples:"
+	@echo "  make config-diff-summary  - Show configuration summary"
+	@echo "  make config-diff-compare  - Compare ib-stream vs ib-contract"
+	@echo "  $(VENV_PYTHON) config-diff.py --help  - Full help"
+	@echo ""
+	$(VENV_PYTHON) config-diff.py summary
+
+config-diff-summary: dev-tools
+	@echo -e "$(YELLOW)Configuration summary for all services:$(NC)"
+	$(VENV_PYTHON) config-diff.py summary
+
+config-diff-compare: dev-tools
+	@echo -e "$(YELLOW)Comparing ib-stream vs ib-contract configurations:$(NC)"
+	$(VENV_PYTHON) config-diff.py compare ib-stream ib-contract
+
+# Legacy targets (deprecated but kept for compatibility)
+start-production-legacy: 
+	@echo -e "$(YELLOW)WARNING: Using legacy configuration system$(NC)"
+	@echo "Consider migrating to: make start-supervisor-v2"
+	$(MAKE) start-production
+
+test-connection-legacy: 
+	@echo -e "$(YELLOW)WARNING: Using legacy configuration system$(NC)"
+	@echo "Consider migrating to: make test-connection-v2"
+	$(MAKE) test-connection

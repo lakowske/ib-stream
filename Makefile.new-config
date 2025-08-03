@@ -1,0 +1,21 @@
+
+# New Configuration Management (using ib-util)
+config-validate:
+	@echo "Validating configuration..."
+	.venv/bin/python -c "from ib_util.config.cli import config_cli; import sys; sys.argv=['config-cli', 'validate']; config_cli()"
+
+config-show-production:
+	@echo "Production configuration:"
+	.venv/bin/python -c "from ib_util.config.cli import config_cli; import sys; sys.argv=['config-cli', 'show', '--service', 'ib-stream', '--environment', 'production']; config_cli()"
+
+start-production-new:
+	@echo "Starting production services with new configuration system..."
+	IB_ENVIRONMENT=production .venv/bin/supervisord -c supervisor-production.conf
+
+start-development-new:
+	@echo "Starting development services with new configuration system..."  
+	IB_ENVIRONMENT=development .venv/bin/supervisord -c supervisor-development.conf
+
+# Legacy targets (keep for transition)
+start-production-legacy: start-production
+start-development-legacy: start-supervisor
