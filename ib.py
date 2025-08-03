@@ -202,40 +202,139 @@ def services():
     pass
 
 
+def ensure_supervisor_config():
+    """Ensure supervisor configuration and instance config are ready"""
+    echo(style("Generating instance configuration...", fg='yellow'))
+    run_command([str(VENV_PYTHON), 'generate_instance_config.py'])
+
+
+def get_supervisorctl():
+    """Get the supervisorctl path with proper configuration"""
+    # Set required environment variables for supervisor config
+    env = os.environ.copy()
+    env['PROJECT_ROOT'] = str(PROJECT_ROOT)
+    env['USER'] = os.getenv('USER', 'unknown')
+    
+    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
+
+
 @services.command()
 @click.option('--environment', type=click.Choice(['development', 'production']), 
-              default='development', help='Target environment')
+              default='production', help='Target environment')
 def start(environment):
     """Start services with supervisor"""
+    ensure_venv()
+    ensure_supervisor_config()
+    
     echo(style(f"Starting services in {environment} mode...", fg='yellow'))
     
-    if environment == 'production':
-        run_command(['make', 'start-supervisor'])
-    else:
-        run_command(['make', 'start-supervisor'])
+    # Set environment variables
+    env = os.environ.copy()
+    env['PROJECT_ROOT'] = str(PROJECT_ROOT)
+    env['USER'] = os.getenv('USER', 'unknown')
+    
+    # Start supervisord if not running
+    echo(style("Starting supervisor daemon...", fg='yellow'))
+    try:
+        result = subprocess.run([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisord'), '-c', 'supervisor.conf'], 
+                               capture_output=True, text=True, env=env)
+        if result.returncode != 0 and "already listening" not in result.stderr:
+            echo(style(f"Supervisor start result: {result.stderr}", fg='yellow'))
+    except Exception as e:
+        echo(style(f"Note: Supervisor may already be running: {e}", fg='yellow'))
+    
+    # Start all programs
+    echo(style("Starting services...", fg='green'))
+    cmd, env = get_supervisorctl()
+    
+    import subprocess
+    result = subprocess.run(cmd + ['start', 'all'], capture_output=True, text=True, env=env)
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
 
 
 @services.command()
 def status():
     """Show service status"""
-    run_command(['make', 'supervisor-status'])
-
-
-@services.command()
-@click.option('--service', help='Specific service to show logs for')
-def logs(service):
-    """Show service logs"""
-    if service:
-        run_command(['./supervisor-wrapper.sh', 'tail', '-f', service])
-    else:
-        run_command(['make', 'supervisor-logs'])
+    ensure_venv()
+    echo(style("Service Status:", fg='cyan'))
+    cmd, env = get_supervisorctl()
+    
+    import subprocess
+    result = subprocess.run(cmd + ['status'], capture_output=True, text=True, env=env)
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr and result.returncode != 0:
+        echo(style(result.stderr, fg='red'))
 
 
 @services.command()
 def stop():
     """Stop all services"""
+    ensure_venv()
     echo(style("Stopping services...", fg='yellow'))
-    run_command(['make', 'supervisor-stop'])
+    cmd, env = get_supervisorctl()
+    
+    import subprocess
+    result = subprocess.run(cmd + ['stop', 'all'], capture_output=True, text=True, env=env)
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+
+
+@services.command()
+@click.argument('service', required=False)
+def restart(service):
+    """Restart services (or specific service)"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    import subprocess
+    if service:
+        echo(style(f"Restarting {service}...", fg='yellow'))
+        result = subprocess.run(cmd + ['restart', service], capture_output=True, text=True, env=env)
+    else:
+        echo(style("Restarting all services...", fg='yellow'))
+        result = subprocess.run(cmd + ['restart', 'all'], capture_output=True, text=True, env=env)
+    
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+
+
+@services.command()
+@click.option('--service', help='Show logs for specific service')
+@click.option('--follow', '-f', is_flag=True, help='Follow logs in real time')
+def logs(service, follow):
+    """Show service logs"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    import subprocess
+    if service:
+        if follow:
+            echo(style(f"Following logs for {service} (Ctrl+C to stop)...", fg='yellow'))
+            # For follow mode, don't capture output - let it stream
+            subprocess.run(cmd + ['tail', '-f', service], env=env)
+        else:
+            echo(style(f"Recent logs for {service}:", fg='cyan'))
+            result = subprocess.run(cmd + ['tail', service], capture_output=True, text=True, env=env)
+            if result.stdout:
+                echo(result.stdout)
+            if result.stderr:
+                echo(style(result.stderr, fg='red'))
+    else:
+        echo(style("Available services:", fg='cyan'))
+        result = subprocess.run(cmd + ['status'], capture_output=True, text=True, env=env)
+        if result.stdout:
+            echo(result.stdout)
+        echo(style("\nUse --service <name> to view specific logs", fg='yellow'))
+
+
 
 
 # =============================================================================
@@ -268,15 +367,56 @@ print(f'Storage: {config.storage.enable_storage}')
         """
     ])
     
-    echo(style("Testing with sample contract...", fg='yellow'))
-    # Use safe subprocess execution instead of shell command
-    cmd = ['timeout', '10s', str(VENV_PYTHON), '-m', 'ib_stream.stream', '265598', '--number', '1', '--json']
-    result = run_command(cmd, check=False, cwd=PROJECT_ROOT / 'ib-stream')
+    echo(style("Testing with sample contract using localhost:4002...", fg='yellow'))
+    # Use direct connection test to localhost:4002 with unique client ID
+    env = os.environ.copy()
+    env['IB_HOST'] = 'localhost'
+    env['IB_PORTS'] = '[4002]'
+    env['IB_CLIENT_ID'] = '777'  # Use unique client ID for testing
+    env['IB_ENVIRONMENT'] = 'test'
+    
+    # Simple connection test using StreamingApp directly
+    cmd = [str(VENV_PYTHON), '-c', """
+import sys; sys.path.insert(0, 'ib-stream/src')
+import os, time
+from ib_stream.streaming_app import StreamingApp
+from ib_stream.config_v2 import create_config
+
+# Set test environment variables for config
+os.environ['IB_HOST'] = 'localhost'
+os.environ['IB_PORTS'] = '[4002]'
+os.environ['IB_CLIENT_ID'] = '777'
+os.environ['IB_ENVIRONMENT'] = 'development'
+os.environ['IB_STREAM_ENABLE_STORAGE'] = 'false'
+
+# Create test config with environment overrides
+test_config = create_config()
+
+app = StreamingApp(test_config)
+app.connect_and_start()
+time.sleep(2)  # Give time to connect
+if app.is_connected():
+    print('✓ Connected successfully to IB Gateway')
+else:
+    print('✗ Failed to connect to IB Gateway')
+app.disconnect_and_stop()
+"""]
+    
+    import subprocess
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT / 'ib-stream', env=env, timeout=10)
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(cmd, 124, stdout='', stderr='Connection timeout')
     
     if result.returncode == 0:
         echo(style("✓ Connection test successful", fg='green'))
+        if result.stdout.strip():
+            echo(result.stdout.strip())
     else:
         echo(style("✗ Connection test failed - check IB Gateway", fg='red'))
+        if result.stderr.strip():
+            echo(style(f"Error: {result.stderr.strip()}", fg='red'))
+        echo(style(f"Return code: {result.returncode}", fg='yellow'))
 
 
 @test.command()

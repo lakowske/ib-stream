@@ -9,7 +9,7 @@ import time
 
 from .streaming_app import StreamingApp
 from .utils import configure_logging, print_connection_error
-from .config import create_config
+from .config_v2 import create_config
 
 
 def parse_arguments():
