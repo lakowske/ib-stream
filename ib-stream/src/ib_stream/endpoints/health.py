@@ -52,14 +52,53 @@ def setup_health_endpoints(app, config):
             # Get fresh config from app state
             current_config = app_state['config']
             
+            # Add time and storage monitoring to health check
+            from ib_util.time_monitoring import get_time_health_status
+            from ib_util.storage_monitoring import get_storage_health_status
+            
+            time_health = get_time_health_status()
+            
+            # Get storage streaming health (check for active data streaming)
+            try:
+                storage_health = get_storage_health_status()['storage_streaming']
+            except Exception as e:
+                logger.warning(f"Storage monitoring failed: {e}")
+                storage_health = {"status": "error", "message": str(e)}
+            
+            # Determine overall status based on all subsystems
+            overall_status = "healthy"
+            if not tws_connected:
+                overall_status = "degraded"
+            elif time_health['time_sync']['status'] == "critical":
+                overall_status = "degraded"
+            elif storage_health.get('status') == "critical":
+                overall_status = "degraded"
+            elif time_health['time_sync']['status'] == "warning" or storage_health.get('status') == "warning":
+                overall_status = "warning"
+            
             return {
-                "status": "healthy",
+                "service": f"ib-stream",
+                "status": overall_status,
                 "timestamp": datetime.now().isoformat(),
                 "tws_connected": tws_connected,
                 "active_streams": active_stream_count,
-                "storage": storage_status,
                 "max_streams": current_config.max_concurrent_streams,
                 "client_id": current_config.client_id,
+                "connection_ports": current_config.connection_ports,
+                "storage": storage_status,
+                "storage_streaming": storage_health,
+                "time_sync": time_health['time_sync'],
+                "background_streaming": {
+                    "enabled": background_manager is not None,
+                    "tracked_contracts": len(current_config.storage.tracked_contracts) if background_manager else 0,
+                    "status": "running" if background_manager else "disabled"
+                },
+                "features": {
+                    "sse_streaming": True,
+                    "websocket_streaming": True,
+                    "v3_storage": True,
+                    "background_tracking": background_manager is not None
+                }
             }
         except Exception as e:
             logger.error("Health check failed: %s", e)
@@ -151,92 +190,22 @@ def setup_health_endpoints(app, config):
     
     @router.get("/time/status")
     async def time_status():
-        """Check system time drift and synchronization status"""
-        import subprocess
-        import socket
-        import struct
-        from datetime import datetime, timezone
+        """Check system time drift and synchronization status using ib-util time monitoring"""
+        from ib_util.time_monitoring import get_time_health_status
         
-        async def get_ntp_time(server: str = 'pool.ntp.org') -> dict:
-            try:
-                client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                client.settimeout(2)
-                
-                # NTP packet format
-                packet = b'\x1b' + 47 * b'\0'
-                client.sendto(packet, (server, 123))
-                data, _ = client.recvfrom(1024)
-                client.close()
-                
-                # Extract timestamp
-                unpacked = struct.unpack('!12I', data)
-                timestamp = unpacked[10] + unpacked[11] / 2**32
-                unix_timestamp = timestamp - 2208988800
-                
-                ntp_time = datetime.fromtimestamp(unix_timestamp, timezone.utc)
-                system_time = datetime.now(timezone.utc)
-                drift = (system_time - ntp_time).total_seconds()
-                
-                return {
-                    "server": server,
-                    "ntp_time": ntp_time.isoformat(),
-                    "system_time": system_time.isoformat(),
-                    "drift_seconds": round(drift, 3),
-                    "status": "success"
-                }
-            except Exception as e:
-                return {
-                    "server": server,
-                    "error": str(e),
-                    "status": "error"
-                }
-        
-        # Get NTP status
-        ntp_status = await get_ntp_time()
-        
-        # Get system time sync status
         try:
-            timedatectl_result = subprocess.run(
-                ['timedatectl', 'status'], 
-                capture_output=True, 
-                text=True, 
-                timeout=5
+            time_health = get_time_health_status()
+            return time_health['time_sync']
+        except Exception as e:
+            logger.error("Time status check failed: %s", e)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Time monitoring failed: {str(e)}",
+                    "timestamp": datetime.now().isoformat()
+                }
             )
-            sync_status = "synchronized" in timedatectl_result.stdout
-        except:
-            sync_status = False
-        
-        # Get NTP peer info
-        try:
-            ntpq_result = subprocess.run(
-                ['ntpq', '-p'], 
-                capture_output=True, 
-                text=True, 
-                timeout=5
-            )
-            ntpq_output = ntpq_result.stdout
-        except:
-            ntpq_output = "NTP query failed"
-        
-        # Determine overall status
-        drift = abs(ntp_status.get('drift_seconds', 999))
-        if drift > 30:
-            overall_status = "critical"
-        elif drift > 5:
-            overall_status = "warning"  
-        elif drift > 1:
-            overall_status = "caution"
-        else:
-            overall_status = "good"
-        
-        return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "overall_status": overall_status,
-            "system_sync": sync_status,
-            "ntp_check": ntp_status,
-            "ntpq_peers": ntpq_output,
-            "message": f"Time drift: {drift:.3f}s ({overall_status})"
-        }
     
     @router.get("/time/drift/history")
     async def time_drift_history(limit: int = 100):
@@ -268,5 +237,126 @@ def setup_health_endpoints(app, config):
                 "error": f"Failed to read time drift history: {e}",
                 "entries": []
             }
+
+    @router.get("/system/health")
+    async def system_health():
+        """Unified system health endpoint for external monitoring (UptimeRobot)"""
+        import aiohttp
+        from datetime import datetime
+        
+        try:
+            # Aggregate health from both services
+            services_health = {}
+            overall_status = "healthy"
+            issues = []
+            
+            service_urls = {
+                'ib-stream': 'http://localhost:8851/health',
+                'ib-contract': 'http://localhost:8861/health'
+            }
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                for service_name, url in service_urls.items():
+                    try:
+                        async with session.get(url) as response:
+                            if response.status == 200:
+                                service_data = await response.json()
+                                services_health[service_name] = {
+                                    "status": service_data.get('status', 'unknown'),
+                                    "tws_connected": service_data.get('tws_connected', False),
+                                    "time_sync": service_data.get('time_sync', {})
+                                }
+                                
+                                # Check for issues
+                                if not service_data.get('tws_connected', False):
+                                    issues.append(f"{service_name}: TWS disconnected")
+                                
+                                time_sync = service_data.get('time_sync', {})
+                                if time_sync.get('status') == 'critical':
+                                    overall_status = "degraded"
+                                    issues.append(f"{service_name}: Critical time drift ({time_sync.get('drift_ms', 0):.1f}ms)")
+                                elif time_sync.get('status') == 'warning' and overall_status == "healthy":
+                                    overall_status = "warning"
+                                    issues.append(f"{service_name}: Time drift warning ({time_sync.get('drift_ms', 0):.1f}ms)")
+                                    
+                                if service_data.get('status') not in ['healthy', 'warning']:
+                                    overall_status = "degraded"
+                                    issues.append(f"{service_name}: Service status {service_data.get('status')}")
+                                    
+                            else:
+                                services_health[service_name] = {"status": "error", "message": f"HTTP {response.status}"}
+                                overall_status = "degraded"
+                                issues.append(f"{service_name}: HTTP {response.status}")
+                                
+                    except Exception as e:
+                        services_health[service_name] = {"status": "error", "message": str(e)}
+                        overall_status = "degraded"
+                        issues.append(f"{service_name}: {str(e)}")
+            
+            # Storage verification - check if recent data exists
+            storage_status = "unknown"
+            try:
+                from pathlib import Path
+                import os
+                
+                storage_path = Path("ib-stream/storage")
+                if storage_path.exists():
+                    # Check for files modified in last 5 minutes
+                    recent_files = []
+                    for file_path in storage_path.rglob("*.pb"):
+                        if os.path.getmtime(file_path) > (datetime.now().timestamp() - 300):
+                            recent_files.append(file_path)
+                    
+                    if recent_files:
+                        storage_status = "active"
+                    else:
+                        storage_status = "stale"
+                        if overall_status == "healthy":
+                            overall_status = "warning"
+                        issues.append("Storage: No recent data files")
+                else:
+                    storage_status = "missing"
+                    overall_status = "degraded"
+                    issues.append("Storage: Directory not found")
+                    
+            except Exception as e:
+                storage_status = "error"
+                issues.append(f"Storage check failed: {str(e)}")
+            
+            # HTTP status code based on overall health
+            status_code = 200
+            if overall_status == "degraded":
+                status_code = 503  # Service Unavailable
+            elif overall_status == "warning":
+                status_code = 200  # OK but with warnings
+            
+            response_data = {
+                "system_status": overall_status,
+                "timestamp": datetime.now().isoformat(),
+                "services": services_health,
+                "storage": {"status": storage_status},
+                "summary": {
+                    "healthy_services": sum(1 for s in services_health.values() if s.get('status') in ['healthy', 'warning']),
+                    "total_services": len(services_health),
+                    "issues": issues
+                }
+            }
+            
+            return JSONResponse(
+                status_code=status_code,
+                content=response_data
+            )
+            
+        except Exception as e:
+            logger.error("System health check failed: %s", e)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "system_status": "error",
+                    "timestamp": datetime.now().isoformat(),
+                    "error": str(e),
+                    "message": "System health check failed"
+                }
+            )
     
     app.include_router(router)
