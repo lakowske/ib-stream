@@ -309,9 +309,63 @@ def get_time_drift_status(samples: int = 3, timeout: float = 2.0) -> Optional[Ti
     return monitor.measure_drift_summary()
 
 def get_time_health_status() -> Dict:
-    """Get time health status for health endpoints"""
-    monitor = TimeMonitor(samples=2, timeout=1.5)  # Fast check for health endpoints
-    return monitor.get_health_status()
+    """Get time health status for health endpoints using Chrony's superior tracking"""
+    try:
+        # Use Chrony's built-in tracking - much more accurate than our NTP queries
+        import subprocess
+        result = subprocess.run(['chronyc', 'tracking'], capture_output=True, text=True, timeout=5)
+        
+        if result.returncode != 0:
+            # Fallback to our NTP monitoring if Chrony unavailable
+            monitor = TimeMonitor(samples=2, timeout=1.5)
+            return monitor.get_health_status()
+        
+        # Parse Chrony tracking output
+        lines = result.stdout.strip().split('\n')
+        system_time_line = next((line for line in lines if 'System time' in line), None)
+        
+        if not system_time_line:
+            # Fallback if parsing fails
+            monitor = TimeMonitor(samples=2, timeout=1.5)
+            return monitor.get_health_status()
+        
+        # Extract drift from "System time : 0.001580169 seconds fast of NTP time"
+        parts = system_time_line.split(':')[1].strip().split()
+        drift_seconds = float(parts[0])
+        drift_ms = drift_seconds * 1000
+        
+        # Determine status based on Chrony's more accurate measurement
+        if abs(drift_ms) < 1:
+            status = "healthy"
+            classification = "excellent"
+        elif abs(drift_ms) < 5:
+            status = "healthy" 
+            classification = "good"
+        elif abs(drift_ms) < 50:
+            status = "warning"
+            classification = "acceptable"
+        else:
+            status = "critical"
+            classification = "poor"
+        
+        return {
+            "time_sync": {
+                "status": status,
+                "drift_ms": round(drift_ms, 3),
+                "precision_ms": "chrony_internal",
+                "range_ms": None,
+                "servers_available": "chrony_managed",
+                "total_servers": "chrony_managed", 
+                "classification": classification,
+                "source": "chrony_tracking",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        }
+        
+    except Exception as e:
+        # Fallback to original monitoring on any error
+        monitor = TimeMonitor(samples=2, timeout=1.5)
+        return monitor.get_health_status()
 
 def sync_time() -> bool:
     """Sync system time"""

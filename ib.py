@@ -18,8 +18,9 @@ import sys
 import os
 import subprocess
 import json
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import click
 from click import echo, style
@@ -563,11 +564,11 @@ def monitor_status():
         echo(style("Error: requests library not installed", fg='red'))
         echo("Install with: pip install requests")
 
-@monitor.command('time-drift')
+@monitor.command('ntp-time-drift')
 @click.option('--samples', '-s', default=5, help='Number of samples per server')
 @click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
-def monitor_time_drift(samples: int, output_json: bool):
-    """Check high-precision time drift against NTP servers"""
+def monitor_ntp_time_drift(samples: int, output_json: bool):
+    """Check time drift using direct NTP server queries (legacy method)"""
     try:
         from ib_util.time_monitoring import get_time_drift_status
         
@@ -603,6 +604,107 @@ def monitor_time_drift(samples: int, output_json: bool):
             
     except ImportError as e:
         echo(style(f"Error: Missing dependency - {e}", fg='red'))
+
+@monitor.command('time-drift')
+@click.option('--json', 'output_json', is_flag=True, help='Output in JSON format')
+@click.option('--verbose', '-v', is_flag=True, help='Show additional Chrony statistics')
+def monitor_time_drift(output_json: bool, verbose: bool):
+    """Check time drift using Chrony's superior internal tracking"""
+    try:
+        # Use Chrony's built-in tracking
+        result = run_command(['chronyc', 'tracking'], check=False)
+        if result.returncode != 0:
+            echo(style("❌ Chrony not available, use 'ntp-time-drift' for legacy NTP monitoring", fg='red'))
+            return
+        
+        lines = result.stdout.strip().split('\n') if isinstance(result.stdout, str) else result.stdout.decode().strip().split('\n')
+        
+        # Parse key values
+        system_time_line = next((line for line in lines if 'System time' in line), None)
+        rms_offset_line = next((line for line in lines if 'RMS offset' in line), None)
+        frequency_line = next((line for line in lines if 'Frequency' in line), None)
+        stratum_line = next((line for line in lines if 'Stratum' in line), None)
+        
+        if not system_time_line:
+            echo(style("❌ Could not parse Chrony tracking data", fg='red'))
+            return
+        
+        # Extract drift from "System time : 0.001580169 seconds fast of NTP time"
+        parts = system_time_line.split(':')[1].strip().split()
+        drift_seconds = float(parts[0])
+        drift_ms = drift_seconds * 1000
+        drift_direction = "fast" if "fast" in system_time_line else "slow"
+        
+        # Extract RMS precision
+        rms_ms = 0
+        if rms_offset_line:
+            rms_parts = rms_offset_line.split(':')[1].strip().split()
+            rms_ms = float(rms_parts[0]) * 1000
+        
+        # Extract frequency drift
+        frequency_ppm = 0
+        if frequency_line:
+            freq_parts = frequency_line.split(':')[1].strip().split()
+            frequency_ppm = float(freq_parts[0])
+        
+        # Extract stratum
+        stratum = 0
+        if stratum_line:
+            stratum_parts = stratum_line.split(':')[1].strip()
+            stratum = int(stratum_parts)
+        
+        # Determine status
+        abs_drift = abs(drift_ms)
+        if abs_drift < 1:
+            status = "EXCELLENT"
+            status_color = "green"
+        elif abs_drift < 5:
+            status = "GOOD" 
+            status_color = "green"
+        elif abs_drift < 50:
+            status = "ACCEPTABLE"
+            status_color = "yellow"
+        elif abs_drift < 500:
+            status = "POOR"
+            status_color = "yellow"
+        else:
+            status = "CRITICAL"
+            status_color = "red"
+        
+        if output_json:
+            result_data = {
+                "drift_ms": round(drift_ms, 3),
+                "drift_direction": drift_direction,
+                "rms_precision_ms": round(rms_ms, 3),
+                "frequency_ppm": frequency_ppm,
+                "stratum": stratum,
+                "status": status.lower(),
+                "source": "chrony_internal",
+                "timestamp": datetime.now().isoformat()
+            }
+            echo(json.dumps(result_data, indent=2))
+        else:
+            echo(style("Time Drift Analysis (Chrony Internal)", fg='cyan', bold=True))
+            echo("=" * 45)
+            echo(f"Current drift:   {drift_ms:+8.3f}ms ({drift_direction})")
+            echo(f"RMS precision:   ±{rms_ms:7.3f}ms")
+            echo(f"Status:          {style(status, fg=status_color, bold=True)}")
+            echo(f"Stratum:         {stratum}")
+            if verbose:
+                echo(f"Frequency:       {frequency_ppm:+.3f} ppm")
+                echo("Source:          Chrony internal tracking")
+                echo("Accuracy:        Superior to NTP queries")
+                
+                # Show sources if verbose
+                echo(style("\nNTP Sources:", fg='cyan'))
+                sources_result = run_command(['chronyc', 'sources', '-v'], check=False)
+                if sources_result.returncode == 0:
+                    sources_output = sources_result.stdout if isinstance(sources_result.stdout, str) else sources_result.stdout.decode()
+                    echo(sources_output)
+        
+    except Exception as e:
+        echo(style(f"❌ Error accessing Chrony: {e}", fg='red'))
+        echo("Use 'ntp-time-drift' for legacy NTP monitoring")
 
 @monitor.command('sync-time')
 def monitor_sync_time():

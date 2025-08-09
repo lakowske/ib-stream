@@ -261,23 +261,39 @@ def setup_health_endpoints(app, config):
                         async with session.get(url) as response:
                             if response.status == 200:
                                 service_data = await response.json()
+                                
+                                # Get time sync data using our Chrony-based monitoring
+                                time_sync_data = {}
+                                try:
+                                    from ib_util.time_monitoring import get_time_health_status
+                                    time_health = get_time_health_status()
+                                    time_sync_data = time_health.get('time_sync', {})
+                                except Exception as e:
+                                    time_sync_data = {"status": "error", "message": f"Time monitoring error: {str(e)}"}
+                                
                                 services_health[service_name] = {
                                     "status": service_data.get('status', 'unknown'),
                                     "tws_connected": service_data.get('tws_connected', False),
-                                    "time_sync": service_data.get('time_sync', {})
+                                    "time_sync": time_sync_data
                                 }
                                 
                                 # Check for issues
                                 if not service_data.get('tws_connected', False):
                                     issues.append(f"{service_name}: TWS disconnected")
                                 
-                                time_sync = service_data.get('time_sync', {})
-                                if time_sync.get('status') == 'critical':
+                                # Check time sync status using new Chrony-based format
+                                if time_sync_data.get('status') == 'critical':
                                     overall_status = "degraded"
-                                    issues.append(f"{service_name}: Critical time drift ({time_sync.get('drift_ms', 0):.1f}ms)")
-                                elif time_sync.get('status') == 'warning' and overall_status == "healthy":
+                                    drift_ms = time_sync_data.get('drift_ms', 0)
+                                    issues.append(f"{service_name}: Critical time drift ({drift_ms:.1f}ms)")
+                                elif time_sync_data.get('status') == 'warning' and overall_status == "healthy":
                                     overall_status = "warning"
-                                    issues.append(f"{service_name}: Time drift warning ({time_sync.get('drift_ms', 0):.1f}ms)")
+                                    drift_ms = time_sync_data.get('drift_ms', 0)
+                                    issues.append(f"{service_name}: Time drift warning ({drift_ms:.1f}ms)")
+                                elif time_sync_data.get('status') == 'error':
+                                    if overall_status == "healthy":
+                                        overall_status = "warning"
+                                    issues.append(f"{service_name}: Time monitoring error")
                                     
                                 if service_data.get('status') not in ['healthy', 'warning']:
                                     overall_status = "degraded"

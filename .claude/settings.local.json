@@ -17,7 +17,22 @@
       "Bash(.venv/bin/python:*)",
       "Bash(grep:*)",
       "Bash(IB_ENVIRONMENT=development python ib.py config validate)",
-      "Bash(IB_ENVIRONMENT=development python ib.py config validate --verbose)"
+      "Bash(IB_ENVIRONMENT=development python ib.py config validate --verbose)",
+      "Bash(sudo hwclock:*)",
+      "Bash(timedatectl:*)",
+      "Bash(systemctl:*)",
+      "Bash(ntpq:*)",
+      "Bash(sudo journalctl:*)",
+      "Bash(sudo ntpd:*)",
+      "Bash(sudo ls:*)",
+      "Bash(sudo mkdir:*)",
+      "Bash(sudo cat:*)",
+      "Bash(sudo apt:*)",
+      "Bash(sudo apt install:*)",
+      "Bash(chronyc:*)",
+      "Bash(../.venv/bin/pip install -e .)",
+      "Bash(git add:*)",
+      "Bash(./.venv/bin/python:*)"
     ],
     "deny": []
   }
