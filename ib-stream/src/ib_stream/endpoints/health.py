@@ -242,6 +242,7 @@ def setup_health_endpoints(app, config):
     async def system_health():
         """Unified system health endpoint for external monitoring (UptimeRobot)"""
         import aiohttp
+        import subprocess
         from datetime import datetime
         
         try:
@@ -268,8 +269,15 @@ def setup_health_endpoints(app, config):
                                     from ib_util.time_monitoring import get_time_health_status
                                     time_health = get_time_health_status()
                                     time_sync_data = time_health.get('time_sync', {})
+                                except ImportError as e:
+                                    time_sync_data = {"status": "error", "message": f"Time monitoring module unavailable: {str(e)}"}
+                                except subprocess.SubprocessError as e:
+                                    time_sync_data = {"status": "error", "message": f"Chrony process error: {str(e)}"}
                                 except Exception as e:
-                                    time_sync_data = {"status": "error", "message": f"Time monitoring error: {str(e)}"}
+                                    # Log the full error for debugging, but return generic message
+                                    import logging
+                                    logging.getLogger(__name__).error(f"Time monitoring error for {service_name}: {str(e)}", exc_info=True)
+                                    time_sync_data = {"status": "error", "message": "Time monitoring temporarily unavailable"}
                                 
                                 services_health[service_name] = {
                                     "status": service_data.get('status', 'unknown'),

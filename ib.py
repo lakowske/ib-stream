@@ -653,18 +653,18 @@ def monitor_time_drift(output_json: bool, verbose: bool):
             stratum_parts = stratum_line.split(':')[1].strip()
             stratum = int(stratum_parts)
         
-        # Determine status
+        # Determine status using consistent thresholds
         abs_drift = abs(drift_ms)
-        if abs_drift < 1:
+        if abs_drift < 1.0:  # EXCELLENT_MS
             status = "EXCELLENT"
             status_color = "green"
-        elif abs_drift < 5:
+        elif abs_drift < 5.0:  # GOOD_MS
             status = "GOOD" 
             status_color = "green"
-        elif abs_drift < 50:
+        elif abs_drift < 50.0:  # ACCEPTABLE_MS
             status = "ACCEPTABLE"
             status_color = "yellow"
-        elif abs_drift < 500:
+        elif abs_drift < 500.0:  # POOR_MS
             status = "POOR"
             status_color = "yellow"
         else:

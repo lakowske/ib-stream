@@ -18,6 +18,13 @@ NTP_PACKET_FORMAT = "!12I"
 NTP_DELTA = 2208988800  # Seconds between 1900-01-01 and 1970-01-01
 NTP_QUERY = b'\x1b' + 47 * b'\0'
 
+# Time drift classification thresholds (milliseconds)
+class TimeDriftThresholds:
+    EXCELLENT_MS = 1.0
+    GOOD_MS = 5.0
+    ACCEPTABLE_MS = 50.0
+    POOR_MS = 500.0
+
 # High-quality NTP servers
 DEFAULT_NTP_SERVERS = [
     'time.google.com',
@@ -73,21 +80,20 @@ class TimeMonitor:
 
     def _query_ntp_server(self, server: str) -> Optional[Tuple[float, float]]:
         """Query NTP server and return (ntp_time, round_trip_delay)"""
-        sock = None
+        # Validate server name
+        if not server or len(server) > 255:
+            self.logger.warning(f"Invalid server name: {server}")
+            return None
+            
         try:
-            # Validate server name
-            if not server or len(server) > 255:
-                self.logger.warning(f"Invalid server name: {server}")
-                return None
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(self.timeout)
                 
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(self.timeout)
-            
-            t1 = time.time()
-            sock.sendto(NTP_QUERY, (server, 123))
-            
-            data, addr = sock.recvfrom(48)
-            t4 = time.time()
+                t1 = time.time()
+                sock.sendto(NTP_QUERY, (server, 123))
+                
+                data, addr = sock.recvfrom(48)
+                t4 = time.time()
             
             # Validate NTP response
             if len(data) != 48:
@@ -118,7 +124,7 @@ class TimeMonitor:
                 self.logger.warning(f"Invalid round trip time from {server}: {round_trip}s")
                 return None
             
-            return ntp_time, round_trip
+                return ntp_time, round_trip
             
         except socket.timeout:
             self.logger.debug(f"Timeout querying {server} after {self.timeout}s")
@@ -135,12 +141,6 @@ class TimeMonitor:
         except Exception as e:
             self.logger.error(f"Unexpected error querying {server}: {e}")
             return None
-        finally:
-            if sock:
-                try:
-                    sock.close()
-                except:
-                    pass
 
     def measure_drift_from_server(self, server: str) -> List[TimeDriftMeasurement]:
         """Measure time drift against specific NTP server with multiple samples"""
@@ -232,39 +232,17 @@ class TimeMonitor:
 
     def _classify_drift_status(self, abs_drift_ms: float) -> TimeDriftStatus:
         """Classify drift severity"""
-        if abs_drift_ms < 1:
+        if abs_drift_ms < TimeDriftThresholds.EXCELLENT_MS:
             return TimeDriftStatus.EXCELLENT
-        elif abs_drift_ms < 5:
+        elif abs_drift_ms < TimeDriftThresholds.GOOD_MS:
             return TimeDriftStatus.GOOD
-        elif abs_drift_ms < 50:
+        elif abs_drift_ms < TimeDriftThresholds.ACCEPTABLE_MS:
             return TimeDriftStatus.ACCEPTABLE
-        elif abs_drift_ms < 500:
+        elif abs_drift_ms < TimeDriftThresholds.POOR_MS:
             return TimeDriftStatus.POOR
         else:
             return TimeDriftStatus.CRITICAL
 
-    def sync_system_time(self) -> bool:
-        """Sync system time using NTP (requires sudo)"""
-        import subprocess
-        
-        # Try multiple sync methods
-        sync_commands = [
-            ['sudo', 'ntpdate', '-s', 'time.google.com'],
-            ['sudo', 'sntp', '-sS', 'time.google.com'],
-            ['sudo', 'chrony', 'makestep']
-        ]
-        
-        for cmd in sync_commands:
-            try:
-                result = subprocess.run(cmd, capture_output=True, timeout=10)
-                if result.returncode == 0:
-                    self.logger.info(f"Time synced using: {' '.join(cmd)}")
-                    return True
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                continue
-        
-        self.logger.error("Failed to sync time with any available method")
-        return False
 
     def get_health_status(self) -> Dict:
         """Get time monitoring health status for health endpoints"""
@@ -367,7 +345,3 @@ def get_time_health_status() -> Dict:
         monitor = TimeMonitor(samples=2, timeout=1.5)
         return monitor.get_health_status()
 
-def sync_time() -> bool:
-    """Sync system time"""
-    monitor = TimeMonitor()
-    return monitor.sync_system_time()
