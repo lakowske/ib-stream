@@ -61,7 +61,7 @@ class ContractLookupApp(IBConnection):
             f"Found {contract.secType} contract: {contract.symbol} {contract.lastTradeDateOrContractMonth or 'N/A'}"
         )
 
-        # Store comprehensive contract information
+        # Store comprehensive contract information including trading hours
         contract_info = {
             "symbol": contract.symbol,
             "sec_type": contract.secType,
@@ -83,6 +83,11 @@ class ContractLookupApp(IBConnection):
             "industry": getattr(contractDetails, "industry", "N/A"),
             "category": getattr(contractDetails, "category", "N/A"),
             "subcategory": getattr(contractDetails, "subcategory", "N/A"),
+            # Trading hours information
+            "time_zone_id": getattr(contractDetails, "timeZoneId", "N/A"),
+            "trading_hours": getattr(contractDetails, "tradingHours", "N/A"),
+            "liquid_hours": getattr(contractDetails, "liquidHours", "N/A"),
+            "retrieved_at": datetime.now().isoformat(),
         }
         self.contracts.append(contract_info)
 

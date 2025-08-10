@@ -16,6 +16,10 @@ from .contract_factory import (
     create_contract_by_id, create_stock_contract, create_futures_contract, create_option_contract,
     create_forex_contract, create_index_contract, create_contract_for_lookup, validate_contract
 )
+from .trading_hours import (
+    TradingHoursParser, MarketStatus, MarketStatusResult, TradingSession,
+    check_contract_market_status, get_contract_trading_schedule
+)
 from .response_formatting import (
     format_timestamp, format_iso_timestamp, format_json_response, create_api_response,
     create_error_response, create_contract_lookup_response, create_health_check_response,

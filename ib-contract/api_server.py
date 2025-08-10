@@ -129,6 +129,128 @@ class ContractAPIServer(BaseAPIServer):
                     status_code=500, 
                     detail=f"Failed to clear cache: {str(e)}"
                 ) from e
+        
+        @self.app.get("/market-status/{contract_id}")
+        async def get_market_status(contract_id: int):
+            """Check if market is currently open for specific contract ID"""
+            try:
+                # Find contract data in cache by contract ID
+                contract_data = await self._find_contract_by_id(contract_id)
+                if not contract_data:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Contract ID {contract_id} not found in cache. Use /lookup endpoints to cache contract first."
+                    )
+                
+                # Check market status using trading hours utilities
+                from ib_util import check_contract_market_status
+                
+                market_status = check_contract_market_status(contract_data)
+                response_data = market_status.to_dict()
+                response_data["contract_info"] = {
+                    "symbol": contract_data.get("symbol"),
+                    "sec_type": contract_data.get("sec_type"), 
+                    "exchange": contract_data.get("exchange"),
+                    "currency": contract_data.get("currency")
+                }
+                
+                return {
+                    "status": "success",
+                    "timestamp": self._get_current_timestamp(),
+                    **response_data
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.error("Error getting market status for contract %d: %s", contract_id, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get market status: {str(e)}"
+                ) from e
+        
+        @self.app.get("/trading-hours/{contract_id}")
+        async def get_trading_hours(contract_id: int):
+            """Get detailed trading hours information for specific contract ID"""
+            try:
+                contract_data = await self._find_contract_by_id(contract_id)
+                if not contract_data:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Contract ID {contract_id} not found in cache. Use /lookup endpoints to cache contract first."
+                    )
+                
+                return {
+                    "status": "success",
+                    "timestamp": self._get_current_timestamp(),
+                    "contract_id": contract_id,
+                    "contract_info": {
+                        "symbol": contract_data.get("symbol"),
+                        "sec_type": contract_data.get("sec_type"),
+                        "exchange": contract_data.get("exchange"),
+                        "currency": contract_data.get("currency"),
+                        "market_name": contract_data.get("market_name")
+                    },
+                    "trading_hours_info": {
+                        "time_zone_id": contract_data.get("time_zone_id"),
+                        "trading_hours": contract_data.get("trading_hours"),
+                        "liquid_hours": contract_data.get("liquid_hours"),
+                        "retrieved_at": contract_data.get("retrieved_at")
+                    }
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.error("Error getting trading hours for contract %d: %s", contract_id, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get trading hours: {str(e)}"
+                ) from e
+        
+        @self.app.get("/trading-schedule/{contract_id}")
+        async def get_trading_schedule(contract_id: int, days: int = 7):
+            """Get upcoming trading schedule for specific contract ID"""
+            try:
+                if days < 1 or days > 30:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Days parameter must be between 1 and 30"
+                    )
+                
+                contract_data = await self._find_contract_by_id(contract_id)
+                if not contract_data:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Contract ID {contract_id} not found in cache. Use /lookup endpoints to cache contract first."
+                    )
+                
+                from ib_util import get_contract_trading_schedule
+                
+                schedule = get_contract_trading_schedule(contract_data, days_ahead=days)
+                
+                return {
+                    "status": "success", 
+                    "timestamp": self._get_current_timestamp(),
+                    "contract_id": contract_id,
+                    "contract_info": {
+                        "symbol": contract_data.get("symbol"),
+                        "sec_type": contract_data.get("sec_type"),
+                        "exchange": contract_data.get("exchange"),
+                        "currency": contract_data.get("currency")
+                    },
+                    "days_requested": days,
+                    "schedule": schedule
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.error("Error getting trading schedule for contract %d: %s", contract_id, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get trading schedule: {str(e)}"
+                ) from e
     
     async def startup(self):
         """Service-specific startup logic"""
@@ -149,10 +271,13 @@ class ContractAPIServer(BaseAPIServer):
     def get_api_info(self) -> Dict[str, Any]:
         """Get contract service API information"""
         return {
-            "description": "Interactive Brokers TWS API contract lookup with file-based caching",
+            "description": "Interactive Brokers TWS API contract lookup with file-based caching and trading hours support",
             "endpoints": {
                 "/lookup/{ticker}": "Get all contracts for a ticker",
                 "/lookup/{ticker}/{sec_type}": "Get contracts for a ticker and security type",
+                "/market-status/{contract_id}": "Check if market is currently open for contract",
+                "/trading-hours/{contract_id}": "Get detailed trading hours information",
+                "/trading-schedule/{contract_id}": "Get upcoming trading schedule",
                 "/health": "Health check with TWS connection status",
                 "/cache/status": "Cache status and statistics",
                 "/cache/clear": "Clear all cache entries",
@@ -164,7 +289,10 @@ class ContractAPIServer(BaseAPIServer):
                 "Memory caching for fast access",
                 "Automatic cache cleanup",
                 "Comprehensive error handling",
-                "Connection pooling and retry logic"
+                "Connection pooling and retry logic",
+                "Trading hours and market status detection",
+                "Multi-timezone support",
+                "Trading schedule forecasting"
             ]
         }
     
@@ -286,6 +414,66 @@ class ContractAPIServer(BaseAPIServer):
         """Get current timestamp in ISO format"""
         from datetime import datetime
         return datetime.now().isoformat()
+    
+    async def _find_contract_by_id(self, contract_id: int) -> Optional[Dict]:
+        """
+        Find contract data by contract ID in cache
+        
+        Args:
+            contract_id: IB contract ID to search for
+            
+        Returns:
+            Contract data dictionary or None if not found
+        """
+        try:
+            # Get all cache entries directly from the cache manager
+            cache_manager = self.cache
+            
+            # Search through memory cache
+            for key, cached_data in cache_manager._memory_cache.items():
+                if isinstance(cached_data, dict):
+                    # Check contracts_by_type structure
+                    contracts_by_type = cached_data.get("contracts_by_type", {})
+                    for sec_type, type_data in contracts_by_type.items():
+                        if isinstance(type_data, dict) and "contracts" in type_data:
+                            contracts_list = type_data["contracts"]
+                        else:
+                            contracts_list = type_data if isinstance(type_data, list) else []
+                        
+                        for contract in contracts_list:
+                            if isinstance(contract, dict) and contract.get("con_id") == contract_id:
+                                return contract
+            
+            # Search through file cache if not found in memory
+            import os
+            import json
+            
+            cache_dir = cache_manager.cache_dir
+            if cache_dir.exists():
+                for cache_file in cache_dir.glob(f"{cache_manager.prefix}_*.json"):
+                    try:
+                        with open(cache_file, 'r') as f:
+                            cached_data = json.load(f)
+                        
+                        if isinstance(cached_data, dict):
+                            contracts_by_type = cached_data.get("contracts_by_type", {})
+                            for sec_type, type_data in contracts_by_type.items():
+                                if isinstance(type_data, dict) and "contracts" in type_data:
+                                    contracts_list = type_data["contracts"]
+                                else:
+                                    contracts_list = type_data if isinstance(type_data, list) else []
+                                
+                                for contract in contracts_list:
+                                    if isinstance(contract, dict) and contract.get("con_id") == contract_id:
+                                        return contract
+                    except (json.JSONDecodeError, IOError) as e:
+                        self.logger.debug(f"Could not read cache file {cache_file}: {e}")
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error("Error searching for contract ID %d: %s", contract_id, e)
+            return None
 
 
 # Factory function for backwards compatibility

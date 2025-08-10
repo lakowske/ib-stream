@@ -32,7 +32,8 @@
       "Bash(chronyc:*)",
       "Bash(../.venv/bin/pip install -e .)",
       "Bash(git add:*)",
-      "Bash(./.venv/bin/python:*)"
+      "Bash(./.venv/bin/python:*)",
+      "Bash(./.venv/bin/pip install:*)"
     ],
     "deny": []
   }
