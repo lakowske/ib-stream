@@ -124,7 +124,7 @@ class TimeMonitor:
                 self.logger.warning(f"Invalid round trip time from {server}: {round_trip}s")
                 return None
             
-                return ntp_time, round_trip
+            return ntp_time, round_trip
             
         except socket.timeout:
             self.logger.debug(f"Timeout querying {server} after {self.timeout}s")

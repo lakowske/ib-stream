@@ -34,11 +34,24 @@ class ContractAPIServer(BaseAPIServer):
         )
         
         # Initialize cache manager with 1-day expiration
+        # Use absolute path to avoid working directory issues
+        from pathlib import Path
+        cache_dir = Path(__file__).parent / ".cache"
         self.cache = CacheManager(
-            cache_dir="./.cache",
+            cache_dir=str(cache_dir),
             cache_duration=timedelta(days=1),
             prefix="contracts",
             auto_cleanup=True
+        )
+        
+        # Initialize contract index for fast lookups
+        from ib_util import get_contract_index, TradingHoursServiceFactory
+        self.contract_index = get_contract_index()
+        
+        # Initialize trading hours service with SOLID principles
+        self.trading_hours_service = TradingHoursServiceFactory.create_service(
+            self.contract_index, 
+            self.cache
         )
         
         # TWS connection state
@@ -134,15 +147,27 @@ class ContractAPIServer(BaseAPIServer):
         async def get_market_status(contract_id: int):
             """Check if market is currently open for specific contract ID"""
             try:
-                # Find contract data in cache by contract ID
-                contract_data = await self._find_contract_by_id(contract_id)
+                # Validate contract ID first
+                from ib_util import validate_contract_id, ValidationError
+                
+                try:
+                    contract_id = validate_contract_id(contract_id)
+                except ValidationError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                
+                # Find contract using reliable cache search (fallback to slow path)
+                contract_data = await self._find_contract_by_id_fast(contract_id)
+                if not contract_data:
+                    # Try slow path as backup
+                    contract_data = self._find_contract_by_id_slow(contract_id)
+                
                 if not contract_data:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Contract ID {contract_id} not found in cache. Use /lookup endpoints to cache contract first."
                     )
                 
-                # Check market status using trading hours utilities
+                # Check market status using trading hours utilities directly
                 from ib_util import check_contract_market_status
                 
                 market_status = check_contract_market_status(contract_data)
@@ -162,6 +187,8 @@ class ContractAPIServer(BaseAPIServer):
                 
             except HTTPException:
                 raise
+            except ValidationError as e:
+                raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
                 self.logger.error("Error getting market status for contract %d: %s", contract_id, e)
                 raise HTTPException(
@@ -173,7 +200,19 @@ class ContractAPIServer(BaseAPIServer):
         async def get_trading_hours(contract_id: int):
             """Get detailed trading hours information for specific contract ID"""
             try:
-                contract_data = await self._find_contract_by_id(contract_id)
+                # Validate contract ID first
+                from ib_util import validate_contract_id, ValidationError
+                
+                try:
+                    contract_id = validate_contract_id(contract_id)
+                except ValidationError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                
+                # Find contract using reliable cache search
+                contract_data = await self._find_contract_by_id_fast(contract_id)
+                if not contract_data:
+                    contract_data = self._find_contract_by_id_slow(contract_id)
+                    
                 if not contract_data:
                     raise HTTPException(
                         status_code=404,
@@ -212,21 +251,33 @@ class ContractAPIServer(BaseAPIServer):
         async def get_trading_schedule(contract_id: int, days: int = 7):
             """Get upcoming trading schedule for specific contract ID"""
             try:
+                # Validate inputs
+                from ib_util import validate_contract_id, ValidationError
+                
+                try:
+                    contract_id = validate_contract_id(contract_id)
+                except ValidationError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                    
                 if days < 1 or days > 30:
                     raise HTTPException(
                         status_code=400,
                         detail="Days parameter must be between 1 and 30"
                     )
                 
-                contract_data = await self._find_contract_by_id(contract_id)
+                # Find contract using reliable cache search
+                contract_data = await self._find_contract_by_id_fast(contract_id)
+                if not contract_data:
+                    contract_data = self._find_contract_by_id_slow(contract_id)
+                    
                 if not contract_data:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Contract ID {contract_id} not found in cache. Use /lookup endpoints to cache contract first."
                     )
                 
+                # Get trading schedule
                 from ib_util import get_contract_trading_schedule
-                
                 schedule = get_contract_trading_schedule(contract_data, days_ahead=days)
                 
                 return {
@@ -405,6 +456,27 @@ class ContractAPIServer(BaseAPIServer):
         # Store in cache
         if self.cache.set(data, *cache_key_parts):
             self.logger.debug("Cached data for %s", "/".join(cache_key_parts))
+            
+            # Update contract index with new contracts
+            try:
+                cache_key = "/".join(cache_key_parts)
+                contracts_added = 0
+                
+                # Add contracts to index
+                contracts_by_type = data.get("contracts_by_type", {})
+                for sec_type, type_data in contracts_by_type.items():
+                    if isinstance(type_data, dict) and "contracts" in type_data:
+                        contracts_list = type_data["contracts"]
+                        for contract in contracts_list:
+                            if isinstance(contract, dict) and contract.get("con_id"):
+                                self.contract_index.add_contract(contract, cache_key)
+                                contracts_added += 1
+                
+                if contracts_added > 0:
+                    self.logger.debug(f"Added {contracts_added} contracts to index for {cache_key}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to update contract index: {e}")
         else:
             self.logger.warning("Failed to cache data for %s", "/".join(cache_key_parts))
         
@@ -415,9 +487,9 @@ class ContractAPIServer(BaseAPIServer):
         from datetime import datetime
         return datetime.now().isoformat()
     
-    async def _find_contract_by_id(self, contract_id: int) -> Optional[Dict]:
+    async def _find_contract_by_id_fast(self, contract_id: int) -> Optional[Dict]:
         """
-        Find contract data by contract ID in cache
+        Fast contract lookup using index
         
         Args:
             contract_id: IB contract ID to search for
@@ -426,13 +498,44 @@ class ContractAPIServer(BaseAPIServer):
             Contract data dictionary or None if not found
         """
         try:
-            # Get all cache entries directly from the cache manager
-            cache_manager = self.cache
+            # Use the contract index for O(1) lookup
+            cache_entry = self.contract_index.find_by_contract_id(contract_id)
             
+            if cache_entry:
+                # Check if entry is still valid (not expired)
+                if not cache_entry.is_expired(ttl_hours=24):
+                    return cache_entry.contract_data
+                else:
+                    # Remove expired entry
+                    self.contract_index.remove_contract(contract_id)
+                    self.logger.debug(f"Removed expired cache entry for contract {contract_id}")
+            
+            # If not in index, try to rebuild index from cache (maybe it was just added)
+            if not hasattr(self, '_index_rebuilt_recently'):
+                self.contract_index.rebuild_from_cache_manager(self.cache)
+                self._index_rebuilt_recently = True
+                
+                # Try again after rebuild
+                cache_entry = self.contract_index.find_by_contract_id(contract_id)
+                if cache_entry and not cache_entry.is_expired(ttl_hours=24):
+                    return cache_entry.contract_data
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error("Error in fast contract lookup for ID %d: %s", contract_id, e)
+            # Fallback to slow search if fast lookup fails
+            return self._find_contract_by_id_slow(contract_id)
+    
+    def _find_contract_by_id_slow(self, contract_id: int) -> Optional[Dict]:
+        """
+        Legacy slow contract search as fallback
+        Only used when fast index lookup fails
+        """
+        try:
             # Search through memory cache
-            for key, cached_data in cache_manager._memory_cache.items():
+            for key, cached_data in self.cache._memory_cache.items():
                 if isinstance(cached_data, dict):
-                    # Check contracts_by_type structure
                     contracts_by_type = cached_data.get("contracts_by_type", {})
                     for sec_type, type_data in contracts_by_type.items():
                         if isinstance(type_data, dict) and "contracts" in type_data:
@@ -442,37 +545,43 @@ class ContractAPIServer(BaseAPIServer):
                         
                         for contract in contracts_list:
                             if isinstance(contract, dict) and contract.get("con_id") == contract_id:
+                                # Add to index for future fast access
+                                self.contract_index.add_contract(contract, key)
                                 return contract
             
-            # Search through file cache if not found in memory
-            import os
+            # Search file cache with security checks
+            from ib_util import ContractIndex
             import json
+            index_helper = ContractIndex()
+            cache_files = index_helper._get_safe_cache_files(self.cache.cache_dir, self.cache.prefix)
             
-            cache_dir = cache_manager.cache_dir
-            if cache_dir.exists():
-                for cache_file in cache_dir.glob(f"{cache_manager.prefix}_*.json"):
-                    try:
-                        with open(cache_file, 'r') as f:
-                            cached_data = json.load(f)
-                        
-                        if isinstance(cached_data, dict):
-                            contracts_by_type = cached_data.get("contracts_by_type", {})
-                            for sec_type, type_data in contracts_by_type.items():
-                                if isinstance(type_data, dict) and "contracts" in type_data:
-                                    contracts_list = type_data["contracts"]
-                                else:
-                                    contracts_list = type_data if isinstance(type_data, list) else []
-                                
-                                for contract in contracts_list:
-                                    if isinstance(contract, dict) and contract.get("con_id") == contract_id:
-                                        return contract
-                    except (json.JSONDecodeError, IOError) as e:
-                        self.logger.debug(f"Could not read cache file {cache_file}: {e}")
+            for cache_file in cache_files:
+                try:
+                    with open(cache_file, 'r') as f:
+                        cached_data = json.load(f)
+                    
+                    if isinstance(cached_data, dict):
+                        contracts_by_type = cached_data.get("contracts_by_type", {})
+                        for sec_type, type_data in contracts_by_type.items():
+                            if isinstance(type_data, dict) and "contracts" in type_data:
+                                contracts_list = type_data["contracts"]
+                            else:
+                                contracts_list = type_data if isinstance(type_data, list) else []
+                            
+                            for contract in contracts_list:
+                                if isinstance(contract, dict) and contract.get("con_id") == contract_id:
+                                    # Add to index for future fast access
+                                    cache_key = cache_file.stem
+                                    self.contract_index.add_contract(contract, cache_key, cache_file)
+                                    return contract
+                                    
+                except (json.JSONDecodeError, IOError) as e:
+                    self.logger.debug(f"Could not read cache file {cache_file}: {e}")
             
             return None
             
         except Exception as e:
-            self.logger.error("Error searching for contract ID %d: %s", contract_id, e)
+            self.logger.error("Error in slow contract search for ID %d: %s", contract_id, e)
             return None
 
 

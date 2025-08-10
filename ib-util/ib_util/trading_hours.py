@@ -12,6 +12,95 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Security and validation constants
+ALLOWED_TIMEZONES = {
+    'US/Eastern', 'US/Central', 'US/Mountain', 'US/Pacific',
+    'Europe/London', 'Europe/Berlin', 'Europe/Zurich',
+    'Asia/Tokyo', 'Asia/Hong_Kong', 'Asia/Shanghai',
+    'Australia/Sydney', 'Australia/Melbourne',
+    'UTC'
+}
+
+MAX_CONTRACT_ID = 999999999999  # IB contract IDs are typically 12 digits max
+MIN_CONTRACT_ID = 1
+
+class ValidationError(Exception):
+    """Custom exception for input validation errors"""
+    pass
+
+def validate_contract_id(contract_id: int) -> int:
+    """
+    Validate contract ID is within acceptable bounds
+    
+    Args:
+        contract_id: Contract ID to validate
+        
+    Returns:
+        Validated contract ID
+        
+    Raises:
+        ValidationError: If contract ID is invalid
+    """
+    if not isinstance(contract_id, int):
+        raise ValidationError(f"Contract ID must be an integer, got {type(contract_id)}")
+    
+    if not (MIN_CONTRACT_ID <= contract_id <= MAX_CONTRACT_ID):
+        raise ValidationError(f"Contract ID {contract_id} out of valid range [{MIN_CONTRACT_ID}, {MAX_CONTRACT_ID}]")
+    
+    return contract_id
+
+def validate_timezone(timezone_id: str) -> str:
+    """
+    Validate timezone ID against allowed list
+    
+    Args:
+        timezone_id: Timezone identifier to validate
+        
+    Returns:
+        Validated timezone ID
+        
+    Raises:
+        ValidationError: If timezone is not allowed
+    """
+    if not isinstance(timezone_id, str):
+        raise ValidationError(f"Timezone must be a string, got {type(timezone_id)}")
+    
+    if not timezone_id or timezone_id == "N/A":
+        return "UTC"  # Default fallback
+    
+    if timezone_id not in ALLOWED_TIMEZONES:
+        logger.warning(f"Unknown timezone '{timezone_id}', falling back to UTC")
+        return "UTC"
+    
+    return timezone_id
+
+def validate_hours_string(hours_string: str) -> str:
+    """
+    Validate trading hours string format
+    
+    Args:
+        hours_string: Trading hours string to validate
+        
+    Returns:
+        Validated hours string
+        
+    Raises:
+        ValidationError: If format is invalid
+    """
+    if not isinstance(hours_string, str):
+        raise ValidationError(f"Hours string must be a string, got {type(hours_string)}")
+    
+    if not hours_string or hours_string == "N/A":
+        return ""
+    
+    # Basic format validation - handle both same-day and cross-date patterns
+    # Same-day: YYYYMMDD:HHMM-HHMM  Cross-date: YYYYMMDD:HHMM-YYYYMMDD:HHMM
+    pattern = r'^(\d{8}:(CLOSED|(\d{4}-\d{4}|\d{4}-\d{8}:\d{4})(,(\d{4}-\d{4}|\d{4}-\d{8}:\d{4}))*);?)+$'
+    if not re.match(pattern, hours_string.replace(' ', '')):
+        logger.warning(f"Trading hours string may have invalid format: {hours_string}")
+    
+    return hours_string
+
 class MarketStatus(Enum):
     """Market status enumeration"""
     OPEN = "open"
@@ -98,13 +187,36 @@ class TradingHoursParser:
                     
                     for time_range in time_ranges:
                         if '-' in time_range:
-                            start_time, end_time = time_range.split('-')
-                            sessions.append(TradingSession(
-                                date=date_part,
-                                start_time=start_time.strip(),
-                                end_time=end_time.strip(),
-                                is_closed=False
-                            ))
+                            start_part, end_part = time_range.split('-', 1)
+                            
+                            # Handle cross-date sessions (e.g., "1700-20250811:1600")
+                            if ':' in end_part:
+                                # Cross-date session: end_part contains date:time
+                                end_date_time = end_part.split(':', 1)
+                                if len(end_date_time) == 2:
+                                    end_date, end_time = end_date_time
+                                    sessions.append(TradingSession(
+                                        date=date_part,
+                                        start_time=start_part.strip(),
+                                        end_time=f"{end_date}:{end_time.strip()}",  # Keep cross-date format
+                                        is_closed=False
+                                    ))
+                                else:
+                                    # Malformed cross-date, treat as same day
+                                    sessions.append(TradingSession(
+                                        date=date_part,
+                                        start_time=start_part.strip(),
+                                        end_time=end_part.strip(),
+                                        is_closed=False
+                                    ))
+                            else:
+                                # Same-day session
+                                sessions.append(TradingSession(
+                                    date=date_part,
+                                    start_time=start_part.strip(),
+                                    end_time=end_part.strip(),
+                                    is_closed=False
+                                ))
                         
         except Exception as e:
             logger.warning(f"Failed to parse trading hours string '{hours_string}': {e}")
@@ -118,32 +230,45 @@ class TradingHoursParser:
         
         Args:
             date_str: YYYYMMDD format
-            time_str: HHMM format  
+            time_str: HHMM format or YYYYMMDD:HHMM format (for cross-date sessions)
             time_zone_id: Timezone identifier (e.g., "US/Eastern")
             
         Returns:
             Timezone-aware datetime or None if parsing fails
         """
         try:
-            # Handle timezone - use UTC if timezone parsing fails
-            tz = timezone.utc
-            if time_zone_id and time_zone_id != "N/A":
-                try:
-                    import pytz
-                    tz = pytz.timezone(time_zone_id)
-                except ImportError:
-                    logger.warning("pytz not available, using UTC for timezone calculations")
-                except Exception as e:
-                    logger.warning(f"Failed to parse timezone '{time_zone_id}': {e}")
+            # Validate and handle timezone securely
+            validated_tz_id = validate_timezone(time_zone_id)
+            
+            try:
+                import pytz
+                tz = pytz.timezone(validated_tz_id)
+            except ImportError:
+                logger.warning("pytz not available, using UTC for timezone calculations")
+                tz = timezone.utc
+            except Exception as e:
+                logger.warning(f"Failed to parse validated timezone '{validated_tz_id}': {e}")
+                tz = timezone.utc
+            
+            # Handle cross-date format (YYYYMMDD:HHMM)
+            if ':' in time_str:
+                cross_date_parts = time_str.split(':', 1)
+                if len(cross_date_parts) == 2:
+                    actual_date_str, actual_time_str = cross_date_parts
+                else:
+                    # Fallback if malformed
+                    actual_date_str, actual_time_str = date_str, time_str.replace(':', '')
+            else:
+                actual_date_str, actual_time_str = date_str, time_str
             
             # Parse date: YYYYMMDD -> YYYY, MM, DD
-            year = int(date_str[:4])
-            month = int(date_str[4:6])
-            day = int(date_str[6:8])
+            year = int(actual_date_str[:4])
+            month = int(actual_date_str[4:6])
+            day = int(actual_date_str[6:8])
             
             # Parse time: HHMM -> HH, MM
-            hour = int(time_str[:2])
-            minute = int(time_str[2:4])
+            hour = int(actual_time_str[:2])
+            minute = int(actual_time_str[2:4])
             
             # Create timezone-aware datetime
             dt = tz.localize(datetime(year, month, day, hour, minute))
@@ -170,6 +295,12 @@ class TradingHoursParser:
         Returns:
             MarketStatusResult with trading status
         """
+        # Validate inputs
+        contract_id = validate_contract_id(contract_id)
+        trading_hours = validate_hours_string(trading_hours)
+        liquid_hours = validate_hours_string(liquid_hours)
+        time_zone_id = validate_timezone(time_zone_id)
+        
         if check_time is None:
             check_time = datetime.now(timezone.utc)
         

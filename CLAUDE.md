@@ -1,5 +1,28 @@
 # Project Commands
 
+## ⚠️ Code Review Protocol ⚠️
+
+**IMPORTANT**: Before making any significant commits, ask if the user wants a code review.
+
+**When to request code review:**
+- New feature implementations (>50 lines of new code)
+- API changes or new endpoints  
+- Database/cache modifications
+- Security-related changes
+- Performance-critical code
+- Complex algorithms or business logic
+
+**Template question to ask:**
+> "I've completed implementing [feature/change]. Would you like me to conduct a code review before committing to identify any issues with code quality, security, performance, or maintainability?"
+
+**Code review command:**
+```bash
+# Use the Task tool with code-quality-auditor agent
+# Focus on: SOLID principles, security, performance, maintainability, production readiness
+```
+
+This helps catch critical issues before they reach production in this trading system where reliability is paramount.
+
 ## ⚠️ CRITICAL WARNING ⚠️
 
 **NEVER stop supervisor services without explicit user permission!**
@@ -12,8 +35,8 @@ The production server continuously records live market data to disk. Stopping it
 **Always ask the user before stopping production servers!**
 
 Safe commands to check status:
-- `python ib.py services status` - Check which services are running
-- `python ib.py test connection` - Test IB Gateway connection health
+- `source .venv/bin/activate && source .venv/bin/activate && python ib.py services status` - Check which services are running
+- `source .venv/bin/activate && source .venv/bin/activate && python ib.py test connection` - Test IB Gateway connection health
 - `curl -s http://localhost:8851/health | jq .` - Check ib-stream health (production port)
 - `curl -s http://localhost:8861/health | jq .` - Check ib-contracts health (production port)
 - `find storage -name "*.pb" -newermt "5 minutes ago" | wc -l` - Verify data is being recorded
@@ -26,25 +49,25 @@ The project now uses a modern CLI tool (`ib.py`) for all configuration, service 
 
 ```bash
 # Configuration Management
-python ib.py config validate              # Validate configuration system
-python ib.py config show                  # Show current configuration
-python ib.py config watch                 # Watch for configuration changes (hot-reload)
-python ib.py config compare ib-stream ib-contract  # Compare service configurations
+source .venv/bin/activate && source .venv/bin/activate && python ib.py config validate              # Validate configuration system
+source .venv/bin/activate && source .venv/bin/activate && python ib.py config show                  # Show current configuration
+source .venv/bin/activate && source .venv/bin/activate && python ib.py config watch                 # Watch for configuration changes (hot-reload)
+source .venv/bin/activate && source .venv/bin/activate && python ib.py config compare ib-stream ib-contract  # Compare service configurations
 
 # Service Management
-python ib.py services start               # Start all services
-python ib.py services status              # Check service status
-python ib.py services logs                # View service logs
-python ib.py services stop                # Stop all services
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services start               # Start all services
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services status              # Check service status
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services logs                # View service logs
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services stop                # Stop all services
 
 # Testing & Validation
-python ib.py test connection              # Test IB Gateway connection
-python ib.py test contract AAPL           # Test contract lookup
+source .venv/bin/activate && source .venv/bin/activate && python ib.py test connection              # Test IB Gateway connection
+source .venv/bin/activate && source .venv/bin/activate && python ib.py test contract AAPL           # Test contract lookup
 
 # Development Tools
-python ib.py dev setup                    # Setup development environment
-python ib.py dev tools                    # Install development tools
-python ib.py dev clean                    # Clean build artifacts
+source .venv/bin/activate && source .venv/bin/activate && python ib.py dev setup                    # Setup development environment
+source .venv/bin/activate && source .venv/bin/activate && python ib.py dev tools                    # Install development tools
+source .venv/bin/activate && source .venv/bin/activate && python ib.py dev clean                    # Clean build artifacts
 ```
 
 ## Configuration System v2
@@ -76,13 +99,13 @@ The project uses a modern type-safe configuration system with automatic fallback
 
 ```bash
 # Start services with the modern CLI
-python ib.py services start
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services start
 
 # Check status (shows actual ports and client IDs)
-python ib.py services status
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services status
 
 # View real-time logs
-python ib.py services logs
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services logs
 ```
 
 ### Legacy Makefile Approach (Still Supported)
@@ -102,7 +125,7 @@ make supervisor-logs
 
 ```bash
 # Using CLI (recommended)
-python ib.py services logs --service ib-stream-remote
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services logs --service ib-stream-remote
 
 # Using traditional supervisor wrapper
 ./supervisor-wrapper.sh start ib-stream-remote
@@ -116,30 +139,30 @@ python ib.py services logs --service ib-stream-remote
 
 ```bash
 # Check entire configuration system health
-python ib.py config validate
+source .venv/bin/activate && python ib.py config validate
 
 # Show detailed validation results
-python ib.py config validate --verbose
+source .venv/bin/activate && python ib.py config validate --verbose
 ```
 
 ### View Current Configuration
 
 ```bash
 # Show summary for all services
-python ib.py config show
+source .venv/bin/activate && python ib.py config show
 
 # Show detailed configuration for specific service
-python ib.py config show --service ib-stream --format detailed
+source .venv/bin/activate && python ib.py config show --service ib-stream --format detailed
 
 # Show configuration in JSON format
-python ib.py config show --service ib-stream --format json
+source .venv/bin/activate && python ib.py config show --service ib-stream --format json
 ```
 
 ### Compare Service Configurations
 
 ```bash
 # Compare ib-stream vs ib-contract configurations
-python ib.py config compare ib-stream ib-contract
+source .venv/bin/activate && python ib.py config compare ib-stream ib-contract
 
 # Show configuration summary for all services
 python ib.py config summary
@@ -149,10 +172,10 @@ python ib.py config summary
 
 ```bash
 # Start configuration watcher
-python ib.py config watch
+source .venv/bin/activate && python ib.py config watch
 
 # Watch specific service only
-python ib.py config watch --service ib-stream
+source .venv/bin/activate && python ib.py config watch --service ib-stream
 
 # In another terminal, edit configuration files
 # Changes are detected and applied automatically
@@ -165,18 +188,18 @@ vim ib-stream/config/development.env
 
 ```bash
 # Test connection to IB Gateway with new configuration
-python ib.py test connection
+source .venv/bin/activate && python ib.py test connection
 
 # Test contract lookup
-python ib.py test contract AAPL
-python ib.py test contract MNQ
+source .venv/bin/activate && python ib.py test contract AAPL
+source .venv/bin/activate && python ib.py test contract MNQ
 ```
 
 ### Service Health Checks
 
 ```bash
 # Check if services are running and healthy
-python ib.py services status
+source .venv/bin/activate && python ib.py services status
 
 # Test specific endpoints (production ports)
 curl -s http://localhost:8851/health | jq .    # ib-stream
@@ -189,23 +212,23 @@ curl -s http://localhost:8861/health | jq .    # ib-contracts
 
 ```bash
 # Complete development setup
-python ib.py dev setup
+source .venv/bin/activate && python ib.py dev setup
 
 # Install development tools (linting, testing, hot-reload)
-python ib.py dev tools
+source .venv/bin/activate && python ib.py dev tools
 
 # Clean build artifacts
-python ib.py dev clean
+source .venv/bin/activate && python ib.py dev clean
 ```
 
 ### Hot-Reload Development
 
 ```bash
 # Start configuration watcher in one terminal
-python ib.py config watch
+source .venv/bin/activate && python ib.py config watch
 
 # Start services in another terminal
-python ib.py services start
+source .venv/bin/activate && python ib.py services start
 
 # Make configuration changes and see live updates
 # Edit files in ib-stream/config/ directory
@@ -215,13 +238,13 @@ python ib.py services start
 
 ```bash
 # Validate configuration changes
-python ib.py config validate
+source .venv/bin/activate && python ib.py config validate
 
 # Test connections with new configuration
-python ib.py test connection
+source .venv/bin/activate && python ib.py test connection
 
 # Compare configurations for debugging
-python ib.py config compare ib-stream ib-contract
+source .venv/bin/activate && python ib.py config compare ib-stream ib-contract
 ```
 
 ## Makefile (Build Automation Only)
@@ -243,16 +266,16 @@ make clean            # Clean build artifacts and temporary files
 These Makefile targets still work but are deprecated in favor of the CLI:
 
 ```bash
-# Deprecated - Use python ib.py services start instead
+# Deprecated - Use source .venv/bin/activate && python ib.py services start instead
 make start-supervisor
 
-# Deprecated - Use python ib.py services status instead  
+# Deprecated - Use source .venv/bin/activate && python ib.py services status instead  
 make supervisor-status
 
-# Deprecated - Use python ib.py services logs instead
+# Deprecated - Use source .venv/bin/activate && python ib.py services logs instead
 make supervisor-logs
 
-# Deprecated - Use python ib.py config validate instead
+# Deprecated - Use source .venv/bin/activate && python ib.py config validate instead
 make config-validate
 ```
 
@@ -262,10 +285,10 @@ make config-validate
 
 ```bash
 # View logs for all services
-python ib.py services logs
+source .venv/bin/activate && python ib.py services logs
 
 # View logs for specific service
-python ib.py services logs --service ib-stream-remote
+source .venv/bin/activate && python ib.py services logs --service ib-stream-remote
 ```
 
 ### Traditional Log Viewing (Still Supported)
@@ -293,10 +316,10 @@ tail -f /var/log/supervisor/ib-contracts-production-stdout.log
 
 ```bash
 # Check service health
-python ib.py services status
+source .venv/bin/activate && python ib.py services status
 
 # Test connections
-python ib.py test connection
+source .venv/bin/activate && python ib.py test connection
 
 # Verify data recording
 find storage -name "*.pb" -newermt "5 minutes ago" | wc -l
@@ -308,53 +331,53 @@ find storage -name "*.pb" -newermt "5 minutes ago" | wc -l
 
 ```bash
 # Validate entire configuration system
-python ib.py config validate --verbose
+source .venv/bin/activate && python ib.py config validate --verbose
 
 # Show detailed configuration for debugging
-python ib.py config show --format detailed
+source .venv/bin/activate && python ib.py config show --format detailed
 
 # Compare configurations to find differences
-python ib.py config compare ib-stream ib-contract
+source .venv/bin/activate && python ib.py config compare ib-stream ib-contract
 ```
 
 ### Connection Problems
 
 ```bash
 # Test IB Gateway connection
-python ib.py test connection
+source .venv/bin/activate && python ib.py test connection
 
 # Check service status
-python ib.py services status
+source .venv/bin/activate && python ib.py services status
 
 # View error logs
-python ib.py services logs
+source .venv/bin/activate && python ib.py services logs
 ```
 
 ### Service Problems
 
 ```bash
 # Restart services
-python ib.py services stop
-python ib.py services start
+source .venv/bin/activate && python ib.py services stop
+source .venv/bin/activate && python ib.py services start
 
 # Check supervisor status
 ./supervisor-wrapper.sh status
 
 # View detailed error logs
-python ib.py services logs --service ib-stream-remote
+source .venv/bin/activate && python ib.py services logs --service ib-stream-remote
 ```
 
 ## Migration from Legacy Commands
 
 | Legacy Makefile Command | New CLI Command | Purpose |
 |-------------------------|-----------------|---------|
-| `make config-validate` | `python ib.py config validate` | Validate configuration |
-| `make config-show` | `python ib.py config show` | Show configuration |
-| `make supervisor-status` | `python ib.py services status` | Check service status |
-| `make supervisor-logs` | `python ib.py services logs` | View service logs |
-| `make test-connection-v2` | `python ib.py test connection` | Test IB connection |
-| `make contract-lookup-v2` | `python ib.py test contract SYMBOL` | Test contract lookup |
-| `make config-watch` | `python ib.py config watch` | Configuration hot-reload |
+| `make config-validate` | `source .venv/bin/activate && python ib.py config validate` | Validate configuration |
+| `make config-show` | `source .venv/bin/activate && python ib.py config show` | Show configuration |
+| `make supervisor-status` | `source .venv/bin/activate && python ib.py services status` | Check service status |
+| `make supervisor-logs` | `source .venv/bin/activate && python ib.py services logs` | View service logs |
+| `make test-connection-v2` | `source .venv/bin/activate && python ib.py test connection` | Test IB connection |
+| `make contract-lookup-v2` | `source .venv/bin/activate && python ib.py test contract SYMBOL` | Test contract lookup |
+| `make config-watch` | `source .venv/bin/activate && python ib.py config watch` | Configuration hot-reload |
 
 The CLI provides better error handling, help systems, and extensibility compared to the legacy Makefile approach.
 
@@ -374,7 +397,7 @@ The CLI provides better error handling, help systems, and extensibility compared
 ### Production Verification ✅ CONFIRMED
 ```bash
 # Verify all systems working:
-python ib.py services status                    # ✅ Services running
+source .venv/bin/activate && python ib.py services status                    # ✅ Services running
 curl -s http://localhost:8851/health | jq .     # ✅ Accurate health status
 find ./ib-stream/storage -type f | wc -l        # ✅ 8+ data files active
 ls -lh ./ib-stream/storage/v*/protobuf/2025/*/*/ # ✅ V3 59% space reduction
