@@ -209,11 +209,45 @@ def ensure_supervisor_config():
     run_command([str(VENV_PYTHON), 'generate_instance_config.py'])
 
 
+def load_instance_config():
+    """Load instance configuration from ib-stream/config/instance.env"""
+    instance_config = {}
+    instance_file = PROJECT_ROOT / 'ib-stream' / 'config' / 'instance.env'
+    
+    if instance_file.exists():
+        try:
+            with open(instance_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        instance_config[key] = value
+        except Exception as e:
+            echo(style(f"Warning: Could not load instance config: {e}", fg='yellow'))
+    
+    return instance_config
+
+
 def get_supervisorctl():
     """Get the supervisorctl path with unified configuration"""
     env = os.environ.copy()
-    env['PROJECT_ROOT'] = str(PROJECT_ROOT)
-    env['USER'] = os.getenv('USER', 'unknown')
+    env['ENV_PROJECT_ROOT'] = str(PROJECT_ROOT)
+    env['ENV_USER'] = os.getenv('USER', 'unknown')
+    
+    # Load instance configuration for port and client ID assignments
+    instance_config = load_instance_config()
+    
+    # Set environment variables for development services
+    env['ENV_IB_STREAM_DEV_PORT'] = str(instance_config.get('IB_STREAM_PORT', '8774'))
+    env['ENV_IB_STREAM_DEV_CLIENT_ID'] = str(instance_config.get('IB_STREAM_CLIENT_ID', '374'))
+    env['ENV_IB_CONTRACT_DEV_PORT'] = str(instance_config.get('IB_CONTRACTS_PORT', '8784'))  
+    env['ENV_IB_CONTRACT_DEV_CLIENT_ID'] = str(instance_config.get('IB_CONTRACTS_CLIENT_ID', '375'))
+    
+    # Set environment variables for production services (fixed values)
+    env['ENV_IB_STREAM_PROD_PORT'] = '8851'
+    env['ENV_IB_STREAM_PROD_CLIENT_ID'] = '851'
+    env['ENV_IB_CONTRACT_PROD_PORT'] = '8861'
+    env['ENV_IB_CONTRACT_PROD_CLIENT_ID'] = '852'
     
     # Always use the unified supervisor.conf
     return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
@@ -229,10 +263,8 @@ def start(environment):
     
     echo(style(f"Starting services in {environment} mode...", fg='yellow'))
     
-    # Set environment variables
-    env = os.environ.copy()
-    env['PROJECT_ROOT'] = str(PROJECT_ROOT)
-    env['USER'] = os.getenv('USER', 'unknown')
+    # Set environment variables (reuse the same logic as get_supervisorctl)
+    _, env = get_supervisorctl()
     
     socket_file = PROJECT_ROOT / 'supervisor.sock'
     
