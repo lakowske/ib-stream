@@ -209,20 +209,14 @@ def ensure_supervisor_config():
     run_command([str(VENV_PYTHON), 'generate_instance_config.py'])
 
 
-def get_supervisorctl(config_file: str = None):
-    """Get the supervisorctl path with proper configuration"""
-    # Set required environment variables for supervisor config
+def get_supervisorctl():
+    """Get the supervisorctl path with unified configuration"""
     env = os.environ.copy()
     env['PROJECT_ROOT'] = str(PROJECT_ROOT)
     env['USER'] = os.getenv('USER', 'unknown')
     
-    # Use specified config file or determine automatically
-    if config_file is None:
-        # Use production supervisor config if it exists and has running services
-        production_config = PROJECT_ROOT / 'supervisor-production.conf'
-        config_file = 'supervisor-production.conf' if production_config.exists() else 'supervisor.conf'
-    
-    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', config_file], env)
+    # Always use the unified supervisor.conf
+    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
 
 
 @services.command()
@@ -240,15 +234,13 @@ def start(environment):
     env['PROJECT_ROOT'] = str(PROJECT_ROOT)
     env['USER'] = os.getenv('USER', 'unknown')
     
-    # Determine which supervisor config to use based on environment
-    config_file = 'supervisor-production.conf' if environment == 'production' else 'supervisor.conf'
     socket_file = PROJECT_ROOT / 'supervisor.sock'
     
     # Clean up stale socket file if supervisor isn't actually running
     import subprocess
     if socket_file.exists():
         try:
-            test_result = subprocess.run([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', config_file, 'status'], 
+            test_result = subprocess.run([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf', 'status'], 
                                        capture_output=True, text=True, env=env, timeout=3)
             if 'no such file' in test_result.stderr.lower() or test_result.returncode != 0:
                 echo(style("Cleaning up stale supervisor socket...", fg='yellow'))
@@ -260,7 +252,7 @@ def start(environment):
     # Start supervisord if not running
     echo(style("Starting supervisor daemon...", fg='yellow'))
     try:
-        result = subprocess.run([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisord'), '-c', config_file], 
+        result = subprocess.run([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisord'), '-c', 'supervisor.conf'], 
                                capture_output=True, text=True, env=env, timeout=10)
         if result.returncode == 0:
             echo(style("✓ Supervisor daemon started successfully", fg='green'))
@@ -277,15 +269,25 @@ def start(environment):
         echo(style(f"✗ Failed to start supervisor daemon: {e}", fg='red'))
         sys.exit(1)
     
-    # Start all programs
-    echo(style("Starting services...", fg='green'))
-    cmd, env = get_supervisorctl(config_file)
+    # Stop services from other environment first
+    echo(style("Stopping services from other environments...", fg='yellow'))
+    cmd, env = get_supervisorctl()
+    other_env = 'production' if environment == 'development' else 'development'
+    other_services = [f'ib-stream-{other_env}', f'ib-contract-{other_env}']
+    for service in other_services:
+        result = subprocess.run(cmd + ['stop', service], capture_output=True, text=True, env=env)
+        # Ignore errors for services that aren't running
     
-    result = subprocess.run(cmd + ['start', 'all'], capture_output=True, text=True, env=env)
-    if result.stdout:
-        echo(result.stdout)
-    if result.stderr:
-        echo(style(result.stderr, fg='yellow'))
+    # Start services for the requested environment
+    echo(style(f"Starting {environment} services...", fg='green'))
+    target_services = [f'ib-stream-{environment}', f'ib-contract-{environment}']
+    
+    for service in target_services:
+        result = subprocess.run(cmd + ['start', service], capture_output=True, text=True, env=env)
+        if result.stdout:
+            echo(result.stdout)
+        if result.stderr:
+            echo(style(result.stderr, fg='yellow'))
 
 
 @services.command()
