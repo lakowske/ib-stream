@@ -157,8 +157,9 @@ class StreamingApp(EWrapper):
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # Schedule the async routing as a task
-                    asyncio.create_task(stream_manager.route_tick_data(reqId, tick_json))
+                    # Schedule the async routing as a task with exception handling
+                    task = asyncio.create_task(stream_manager.route_tick_data(reqId, tick_json))
+                    task.add_done_callback(self._tick_task_exception_handler)
                     return
                 else:
                     # Run the async method
@@ -210,6 +211,16 @@ class StreamingApp(EWrapper):
                 time.sleep(0.1)
                 self.disconnect()
 
+    def _tick_task_exception_handler(self, task: asyncio.Task) -> None:
+        """Handle exceptions from tick processing tasks"""
+        if task.cancelled():
+            return
+            
+        exception = task.exception()
+        if exception is not None:
+            logger.error("Tick processing task failed: %s", exception, exc_info=exception)
+            # Note: We don't restart these tasks as new ticks will create new tasks
+        
     def tickByTickAllLast(
         self,
         reqId: int,

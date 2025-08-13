@@ -130,6 +130,10 @@ class StorageConfigAdapter(BaseStorageConfigAdapter):
         return contracts
     
     @property
+    def max_tracked_contracts(self) -> int:
+        return getattr(self._storage_config, 'max_tracked_contracts', 10)
+    
+    @property
     def background_stream_reconnect_delay(self) -> int:
         return getattr(self._storage_config, 'background_reconnect_delay', 30)
     
@@ -145,6 +149,7 @@ class StorageConfigAdapter(BaseStorageConfigAdapter):
             'enable_client_stream_storage': self.enable_client_stream_storage,
             'enable_background_streaming': self.enable_background_streaming,
             'tracked_contracts': [c.to_dict() for c in self.tracked_contracts],
+            'max_tracked_contracts': self.max_tracked_contracts,
             'background_stream_reconnect_delay': self.background_stream_reconnect_delay,
         })
         

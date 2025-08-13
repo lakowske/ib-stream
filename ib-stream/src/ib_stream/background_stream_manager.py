@@ -39,6 +39,10 @@ class BackgroundStreamManager:
         self.running = False
         self.next_request_id = 60000  # Start background streams at higher request IDs
         
+        # Data staleness monitoring
+        self.last_data_timestamps: Dict[int, datetime] = {}  # contract_id -> last_data_time
+        self.data_staleness_threshold = timedelta(minutes=5)  # Alert if no data for 5+ minutes
+        
         logger.info("BackgroundStreamManager initialized with %d tracked contracts", 
                    len(self.tracked_contracts))
     
@@ -51,13 +55,21 @@ class BackgroundStreamManager:
         self.running = True
         logger.info("Starting background streaming for tracked contracts...")
         
-        # Start connection management task
+        # Connect to stream manager for data staleness tracking
+        from .stream_manager import stream_manager
+        stream_manager.set_background_stream_manager(self)
+        
+        # Start connection management task with exception monitoring
         self.connection_task = asyncio.create_task(self._manage_connection())
+        self.connection_task.add_done_callback(self._task_exception_handler)
+        logger.info("Started connection management task with exception monitoring")
         
-        # Start monitoring task
+        # Start monitoring task with exception monitoring
         self.monitor_task = asyncio.create_task(self._monitor_streams())
+        self.monitor_task.add_done_callback(self._task_exception_handler)
+        logger.info("Started stream monitoring task with exception monitoring")
         
-        logger.info("Background streaming started")
+        logger.info("Background streaming started with comprehensive error handling")
     
     async def stop(self) -> None:
         """Stop all background streaming"""
@@ -137,7 +149,7 @@ class BackgroundStreamManager:
                 if not self._is_connected():
                     continue
                 
-                # Check if all expected streams are active
+                # Check if all expected streams are active and data is flowing
                 for contract_id, contract in self.tracked_contracts.items():
                     if contract_id not in self.active_streams:
                         logger.warning("Missing streams for contract %d (%s), will restart", 
@@ -152,6 +164,19 @@ class BackgroundStreamManager:
                                      contract_id, contract.symbol, active_types, expected_types)
                         # Restart streams for this contract
                         await self._restart_contract_streams(contract_id)
+                    
+                    # Check data staleness - alert if no data received recently during potential trading hours
+                    await self._check_data_staleness(contract_id, contract)
+                
+                # Log monitoring heartbeat every 10 cycles (10 minutes)
+                if hasattr(self, '_monitor_cycle_count'):
+                    self._monitor_cycle_count += 1
+                else:
+                    self._monitor_cycle_count = 1
+                    
+                if self._monitor_cycle_count % 10 == 0:
+                    logger.info("Background stream monitor heartbeat - monitoring %d contracts", 
+                              len(self.tracked_contracts))
                 
             except asyncio.CancelledError:
                 break
@@ -378,6 +403,76 @@ class BackgroundStreamManager:
         request_id = self.next_request_id
         self.next_request_id += 1
         return request_id
+    
+    def _task_exception_handler(self, task: asyncio.Task) -> None:
+        """Handle exceptions from background tasks"""
+        if task.cancelled():
+            logger.info("Background task was cancelled: %s", task.get_name())
+            return
+            
+        exception = task.exception()
+        if exception is not None:
+            logger.error("CRITICAL: Background task failed with exception: %s", exception, exc_info=exception)
+            logger.error("Task name: %s", task.get_name())
+            
+            # Attempt to restart the failed task if we're still running
+            if self.running:
+                asyncio.create_task(self._restart_failed_task(task))
+        else:
+            logger.warning("Background task completed unexpectedly without exception: %s", task.get_name())
+            
+    async def _restart_failed_task(self, failed_task: asyncio.Task) -> None:
+        """Restart a failed background task"""
+        try:
+            task_name = failed_task.get_name()
+            logger.info("Attempting to restart failed task: %s", task_name)
+            
+            # Wait a moment before restarting to avoid rapid restart loops
+            await asyncio.sleep(5)
+            
+            # Restart based on task type
+            if self.connection_task and self.connection_task == failed_task:
+                logger.info("Restarting connection management task")
+                self.connection_task = asyncio.create_task(self._manage_connection())
+                self.connection_task.add_done_callback(self._task_exception_handler)
+                
+            elif self.monitor_task and self.monitor_task == failed_task:
+                logger.info("Restarting stream monitoring task")
+                self.monitor_task = asyncio.create_task(self._monitor_streams())
+                self.monitor_task.add_done_callback(self._task_exception_handler)
+                
+        except Exception as e:
+            logger.error("Failed to restart background task: %s", e)
+    
+    async def _check_data_staleness(self, contract_id: int, contract: TrackedContract) -> None:
+        """Check if data is stale for a contract and log warnings"""
+        now = datetime.now(timezone.utc)
+        last_data_time = self.last_data_timestamps.get(contract_id)
+        
+        if last_data_time is None:
+            # No data received yet - this might be expected if streams just started
+            if contract_id in self.active_streams:
+                # Only warn if streams have been active for more than staleness threshold
+                logger.debug("No data recorded yet for contract %d (%s)", contract_id, contract.symbol)
+            return
+            
+        time_since_data = now - last_data_time
+        
+        # Alert if data is stale beyond threshold
+        if time_since_data > self.data_staleness_threshold:
+            logger.warning("STALE DATA: Contract %d (%s) has not received data for %s (threshold: %s)",
+                          contract_id, contract.symbol, time_since_data, self.data_staleness_threshold)
+            
+            # If data is very stale (30+ minutes), consider restarting streams
+            if time_since_data > timedelta(minutes=30):
+                logger.error("VERY STALE DATA: Restarting streams for contract %d (%s) - no data for %s",
+                           contract_id, contract.symbol, time_since_data)
+                await self._restart_contract_streams(contract_id)
+    
+    def update_data_timestamp(self, contract_id: int) -> None:
+        """Update the last data timestamp for a contract"""
+        self.last_data_timestamps[contract_id] = datetime.now(timezone.utc)
+        logger.debug("Updated data timestamp for contract %d", contract_id)
     
     async def _handle_stream_error(self, error_code: str, error_message: str) -> None:
         """Handle stream errors"""

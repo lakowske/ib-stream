@@ -146,10 +146,16 @@ class StreamManager:
         self.lock = threading.Lock()
         self.storage = storage_instance
         self.enable_client_stream_storage = enable_client_stream_storage
+        self.background_stream_manager = None  # Set by background_stream_manager when available
         
         logger.info("StreamManager initialized with storage: %s, client storage: %s", 
                    "enabled" if storage_instance else "disabled",
                    "enabled" if enable_client_stream_storage else "disabled")
+    
+    def set_background_stream_manager(self, background_manager):
+        """Set reference to background stream manager for data staleness tracking"""
+        self.background_stream_manager = background_manager
+        logger.info("Background stream manager reference set for data staleness tracking")
     
     def register_stream(self, stream_handler: StreamHandler) -> None:
         """Register a new stream handler."""
@@ -187,6 +193,10 @@ class StreamManager:
                         logger.error("Failed to store tick data for request %d: %s", request_id, e)
             
             await handler.process_tick(tick_data)
+            
+            # Update data timestamp for background stream monitoring (if this is a background stream)
+            if self.background_stream_manager and request_id >= 60000:  # Background streams use request IDs >= 60000
+                self.background_stream_manager.update_data_timestamp(handler.contract_id)
             
             # If handler completed, remove it
             if not handler.is_active():
