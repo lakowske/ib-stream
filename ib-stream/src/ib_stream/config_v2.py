@@ -220,6 +220,55 @@ def load_config_from_env():
     return create_legacy_compatible_config()
 
 
+# Utility functions migrated from legacy config.py
+
+def is_valid_tick_type(tick_type: str) -> bool:
+    """Check if tick type is valid."""
+    valid_tick_types = ["Last", "AllLast", "BidAsk", "MidPoint"]
+    return tick_type in valid_tick_types
+
+
+def convert_v2_tick_type_to_tws_api(v2_tick_type: str) -> str:
+    """Convert v2 protocol tick type (snake_case) to TWS API format (PascalCase)."""
+    conversion_map = {
+        "bid_ask": "BidAsk",
+        "last": "Last", 
+        "all_last": "AllLast",
+        "mid_point": "MidPoint"
+    }
+    
+    # Return converted value if found, otherwise return original (for backward compatibility)
+    return conversion_map.get(v2_tick_type, v2_tick_type)
+
+
+# Legacy TrackedContract class for backward compatibility
+class TrackedContract:
+    """Legacy TrackedContract class for backward compatibility."""
+    
+    def __init__(self, contract_id: int, symbol: str, tick_types: List[str] = None, buffer_hours: int = 1, enabled: bool = True):
+        self.contract_id = contract_id
+        self.symbol = symbol
+        self.tick_types = tick_types or ["bid_ask", "last"]
+        self.buffer_hours = buffer_hours
+        self.enabled = enabled
+    
+    def __post_init__(self):
+        """Validate tracked contract configuration."""
+        if self.contract_id <= 0:
+            raise ValueError(f"Contract ID must be positive, got {self.contract_id}")
+        
+        if not self.symbol:
+            raise ValueError("Symbol is required for tracked contracts")
+        
+        if self.buffer_hours < 1:
+            raise ValueError(f"Buffer hours must be at least 1, got {self.buffer_hours}")
+        
+        valid_tick_types = ["bid_ask", "last", "all_last", "mid_point"]
+        for tick_type in self.tick_types:
+            if tick_type not in valid_tick_types:
+                raise ValueError(f"Invalid tick type '{tick_type}'. Valid types: {valid_tick_types}")
+
+
 if __name__ == "__main__":
     # Test the new configuration system
     import json

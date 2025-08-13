@@ -15,7 +15,7 @@ from collections import defaultdict
 from fastapi import WebSocket, WebSocketDisconnect
 from jsonschema import ValidationError
 
-from .config import create_config
+from .config_v2 import create_config
 from .stream_manager import stream_manager, StreamHandler
 from .stream_id import generate_stream_id, generate_multi_stream_id, extract_contract_id, extract_tick_type
 from .ws_schemas import (
@@ -362,7 +362,7 @@ class WebSocketManager:
         self.stream_id_to_connection[stream_id] = connection_id
         
         # Start the actual streaming (convert v2 tick type to TWS API format)
-        from .config import convert_v2_tick_type_to_tws_api
+        from .config_v2 import convert_v2_tick_type_to_tws_api
         tws_tick_type = convert_v2_tick_type_to_tws_api(tick_type)
         app_instance.req_id = stream_handler.request_id
         app_instance.stream_contract(contract_id, tws_tick_type)

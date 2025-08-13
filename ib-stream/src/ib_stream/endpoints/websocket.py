@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket
 
-from ..config import is_valid_tick_type
+from ..config_v2 import is_valid_tick_type
 from ..ws_response import websocket_endpoint, websocket_control_endpoint
 from ..ws_manager import ws_manager
 

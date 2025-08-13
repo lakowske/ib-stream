@@ -10,7 +10,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from fastapi import HTTPException
 
-from .config import convert_v2_tick_type_to_tws_api
+from .config_v2 import convert_v2_tick_type_to_tws_api
 from .storage import create_buffer_query
 from .sse_response import (
     SSEEvent,

@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set
 
-from .config import TrackedContract
+from .config_v2 import TrackedContract
 from .stream_manager import stream_manager, StreamHandler
 from .streaming_app import StreamingApp
 
@@ -193,7 +193,7 @@ class BackgroundStreamManager:
             
             # Create StreamingApp with background-specific client ID
             from ib_util import ConnectionConfig
-            from .config import create_config
+            from .config_v2 import create_config
             
             # Use the same connection configuration as the main service
             main_config = create_config()
@@ -274,7 +274,7 @@ class BackgroundStreamManager:
                 # Start TWS stream
                 try:
                     # Convert v2 tick type to TWS format
-                    from .config import convert_v2_tick_type_to_tws_api
+                    from .config_v2 import convert_v2_tick_type_to_tws_api
                     tws_tick_type = convert_v2_tick_type_to_tws_api(tick_type)
                     
                     # Start the stream with specific request ID

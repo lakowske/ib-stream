@@ -33,7 +33,9 @@
       "Bash(../.venv/bin/pip install -e .)",
       "Bash(git add:*)",
       "Bash(./.venv/bin/python:*)",
-      "Bash(./.venv/bin/pip install:*)"
+      "Bash(./.venv/bin/pip install:*)",
+      "Bash(ping:*)",
+      "Bash(nc:*)"
     ],
     "deny": []
   }

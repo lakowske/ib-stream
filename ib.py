@@ -160,19 +160,17 @@ def show(service, output_format):
               default='all', help='Service to watch')
 def watch(service):
     """Watch configuration files for changes (hot-reload)"""
-    ensure_venv()
-    
-    if service == 'all':
-        service_arg = []
-    else:
-        service_arg = ['--service', service]
-    
-    echo(style("Starting configuration watcher...", fg='yellow'))
-    echo("Edit .env files in ib-stream/config/ to see real-time changes")
-    echo("Press Ctrl+C to stop")
-    echo()
-    
-    run_command([str(VENV_PYTHON), 'config-watch.py'] + service_arg, check=False)
+    click.echo("Configuration hot-reload:")
+    click.echo("=======================")
+    click.echo("Legacy config-watch.py has been removed with the old configuration system")
+    click.echo("The new configuration system uses:")
+    click.echo("- ib-stream: config_v2.py with automatic environment detection")
+    click.echo("- ib-contract: ib-util config with hot-reload built-in")
+    click.echo("")
+    click.echo("For development:")
+    click.echo("1. Edit environment variables in supervisor.conf")
+    click.echo("2. Restart services: python ib.py services restart")
+    click.echo("3. Check configuration: python ib.py config show")
 
 
 @config.command()
@@ -180,17 +178,49 @@ def watch(service):
 @click.argument('service2', type=click.Choice(['ib-stream', 'ib-contract']))
 def compare(service1, service2):
     """Compare configurations between services"""
-    ensure_venv()
+    click.echo(f"Comparing {service1} vs {service2} configurations:")
+    click.echo("Note: Using new configuration system - legacy config-diff.py removed")
     
-    run_command([str(VENV_PYTHON), 'config-diff.py', 'compare', service1, service2])
+    # Simple comparison using new config system
+    try:
+        import os
+        os.environ['IB_ENVIRONMENT'] = 'development'
+        
+        click.echo(f"\n{service1} configuration:")
+        if service1 == 'ib-stream':
+            os.environ['IB_SERVICE_NAME'] = 'ib-stream'
+            from ib_stream.config_v2 import create_config
+            config1 = create_config()
+            click.echo(f"  Host: {config1.host}")
+            click.echo(f"  Client ID: {config1.client_id}")
+            click.echo(f"  Server Port: {config1.server_port}")
+        else:
+            click.echo("  ib-contract uses ib-util config system")
+        
+        click.echo(f"\n{service2} configuration:")
+        if service2 == 'ib-stream':
+            os.environ['IB_SERVICE_NAME'] = 'ib-stream'
+            from ib_stream.config_v2 import create_config
+            config2 = create_config()
+            click.echo(f"  Host: {config2.host}")
+            click.echo(f"  Client ID: {config2.client_id}")
+            click.echo(f"  Server Port: {config2.server_port}")
+        else:
+            click.echo("  ib-contract uses ib-util config system")
+            
+    except Exception as e:
+        click.echo(f"Error comparing configurations: {e}")
 
 
 @config.command()
 def summary():
     """Show configuration summary for all services"""
-    ensure_venv()
-    
-    run_command([str(VENV_PYTHON), 'config-diff.py', 'summary'])
+    click.echo("Configuration Summary:")
+    click.echo("====================")
+    click.echo("All services now use the new unified configuration system")
+    click.echo("- ib-stream: config_v2.py with type-safe validation")
+    click.echo("- ib-contract: ib-util configuration system")
+    click.echo("- Legacy config.py and related files have been removed")
 
 
 # =============================================================================
@@ -230,41 +260,175 @@ def load_instance_config():
 
 def get_supervisorctl():
     """Get the supervisorctl path with unified configuration"""
-    env = os.environ.copy()
-    env['ENV_PROJECT_ROOT'] = str(PROJECT_ROOT)
-    env['ENV_USER'] = os.getenv('USER', 'unknown')
+    # Generate a concrete supervisor configuration without environment variables
+    generate_concrete_supervisor_config()
     
+    # Always use the concrete supervisor.conf
+    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], os.environ.copy())
+
+
+def generate_concrete_supervisor_config():
+    """Generate a concrete supervisor configuration with resolved paths"""
     # Load instance configuration for port and client ID assignments
     instance_config = load_instance_config()
     
-    # Set environment variables for development services
-    env['ENV_IB_STREAM_DEV_PORT'] = str(instance_config.get('IB_STREAM_PORT', '8774'))
-    env['ENV_IB_STREAM_DEV_CLIENT_ID'] = str(instance_config.get('IB_STREAM_CLIENT_ID', '374'))
-    env['ENV_IB_CONTRACT_DEV_PORT'] = str(instance_config.get('IB_CONTRACTS_PORT', '8784'))  
-    env['ENV_IB_CONTRACT_DEV_CLIENT_ID'] = str(instance_config.get('IB_CONTRACTS_CLIENT_ID', '375'))
+    # Template for supervisor configuration
+    config_template = f"""[unix_http_server]
+file={PROJECT_ROOT}/supervisor.sock
+
+[supervisord]
+logfile={PROJECT_ROOT}/logs/supervisord.log
+pidfile={PROJECT_ROOT}/supervisord.pid
+childlogdir={PROJECT_ROOT}/logs
+nodaemon=false
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix://{PROJECT_ROOT}/supervisor.sock
+
+# Development Services (autostart=false, start only when needed)
+[program:ib-stream-development]
+command={PROJECT_ROOT}/.venv/bin/uvicorn ib_stream.api_server:app --host 0.0.0.0 --port {instance_config.get('IB_STREAM_PORT', '8774')} --reload
+directory={PROJECT_ROOT}/ib-stream
+environment=IB_ENVIRONMENT="development",IB_SERVICE_NAME="ib-stream",PROJECT_ROOT="{PROJECT_ROOT}",IB_STREAM_HOST="192.168.0.60",IB_STREAM_PORTS="4002,4001",IB_STREAM_CLIENT_ID="{instance_config.get('IB_STREAM_CLIENT_ID', '374')}",IB_CONNECTION_TIMEOUT="10",IB_RECONNECT_ATTEMPTS="5",IB_STREAM_ENABLE_STORAGE="true",IB_STREAM_STORAGE_PATH="storage-dev",IB_STREAM_ENABLE_JSON="true",IB_STREAM_ENABLE_PROTOBUF="false",IB_STREAM_ENABLE_POSTGRES="false",IB_STREAM_ENABLE_METRICS="true",IB_STREAM_ENABLE_BACKGROUND_STREAMING="false",IB_STREAM_TRACKED_CONTRACTS="",IB_STREAM_BUFFER_SIZE="100",IB_STREAM_BIND_HOST="0.0.0.0",IB_STREAM_PORT="{instance_config.get('IB_STREAM_PORT', '8774')}",IB_STREAM_LOG_LEVEL="DEBUG",IB_STREAM_MAX_STREAMS="10"
+autostart=false
+autorestart=true
+startretries=3
+user={os.getenv('USER', 'unknown')}
+stdout_logfile={PROJECT_ROOT}/logs/ib-stream-development-stdout.log
+stderr_logfile={PROJECT_ROOT}/logs/ib-stream-development-stderr.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+stderr_logfile_backups=5
+
+[program:ib-contract-development]
+command={PROJECT_ROOT}/.venv/bin/uvicorn api_server:app --host 0.0.0.0 --port {instance_config.get('IB_CONTRACTS_PORT', '8784')} --reload
+directory={PROJECT_ROOT}/ib-contract
+environment=IB_ENVIRONMENT="development",IB_SERVICE_NAME="ib-contract",PROJECT_ROOT="{PROJECT_ROOT}",IB_STREAM_HOST="192.168.0.60",IB_STREAM_PORTS="4002,4001",IB_STREAM_CLIENT_ID="{instance_config.get('IB_CONTRACTS_CLIENT_ID', '375')}",IB_CONNECTION_TIMEOUT="10",IB_RECONNECT_ATTEMPTS="5",IB_STREAM_ENABLE_STORAGE="true",IB_STREAM_STORAGE_PATH="storage-dev",IB_STREAM_ENABLE_JSON="true",IB_STREAM_ENABLE_PROTOBUF="false",IB_STREAM_ENABLE_POSTGRES="false",IB_STREAM_ENABLE_METRICS="true",IB_STREAM_ENABLE_BACKGROUND_STREAMING="false",IB_STREAM_TRACKED_CONTRACTS="",IB_CONTRACTS_PORT="{instance_config.get('IB_CONTRACTS_PORT', '8784')}"
+autostart=false
+autorestart=true
+startretries=3
+user={os.getenv('USER', 'unknown')}
+stdout_logfile={PROJECT_ROOT}/logs/ib-contract-development-stdout.log
+stderr_logfile={PROJECT_ROOT}/logs/ib-contract-development-stderr.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+stderr_logfile_backups=5
+
+# Production Services (autostart=false, start only when needed)
+[program:ib-stream-production]
+command={PROJECT_ROOT}/.venv/bin/uvicorn ib_stream.api_server:app --host 0.0.0.0 --port 8851
+directory={PROJECT_ROOT}/ib-stream
+environment=IB_ENVIRONMENT="production",IB_SERVICE_NAME="ib-stream",PROJECT_ROOT="{PROJECT_ROOT}",IB_STREAM_HOST="localhost",IB_STREAM_PORTS="4002",IB_STREAM_CLIENT_ID="851",IB_CONNECTION_TIMEOUT="10",IB_RECONNECT_ATTEMPTS="5",IB_STREAM_ENABLE_STORAGE="true",IB_STREAM_STORAGE_PATH="storage",IB_STREAM_ENABLE_JSON="true",IB_STREAM_ENABLE_PROTOBUF="true",IB_STREAM_ENABLE_POSTGRES="true",IB_STREAM_ENABLE_METRICS="true",IB_STREAM_ENABLE_BACKGROUND_STREAMING="true",IB_STREAM_TRACKED_CONTRACTS="711280073:MNQ:bid_ask;last:24",IB_STREAM_BUFFER_SIZE="1000",IB_STREAM_BIND_HOST="0.0.0.0",IB_STREAM_PORT="8851",IB_STREAM_LOG_LEVEL="INFO",IB_STREAM_MAX_STREAMS="100"
+autostart=false
+autorestart=true
+startretries=3
+user={os.getenv('USER', 'unknown')}
+stdout_logfile={PROJECT_ROOT}/logs/ib-stream-production-stdout.log
+stderr_logfile={PROJECT_ROOT}/logs/ib-stream-production-stderr.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+stderr_logfile_backups=5
+
+[program:ib-contract-production]
+command={PROJECT_ROOT}/.venv/bin/uvicorn api_server:app --host 0.0.0.0 --port 8861
+directory={PROJECT_ROOT}/ib-contract
+environment=IB_ENVIRONMENT="production",IB_SERVICE_NAME="ib-contract",PROJECT_ROOT="{PROJECT_ROOT}",IB_STREAM_HOST="localhost",IB_STREAM_PORTS="4002",IB_STREAM_CLIENT_ID="852",IB_CONNECTION_TIMEOUT="10",IB_RECONNECT_ATTEMPTS="5",IB_STREAM_ENABLE_STORAGE="true",IB_STREAM_STORAGE_PATH="storage",IB_STREAM_ENABLE_JSON="true",IB_STREAM_ENABLE_PROTOBUF="true",IB_STREAM_ENABLE_POSTGRES="true",IB_STREAM_ENABLE_METRICS="true",IB_STREAM_ENABLE_BACKGROUND_STREAMING="true",IB_STREAM_TRACKED_CONTRACTS="711280073:MNQ:bid_ask;last:24",IB_CONTRACTS_PORT="8861"
+autostart=false
+autorestart=true
+startretries=3
+user={os.getenv('USER', 'unknown')}
+stdout_logfile={PROJECT_ROOT}/logs/ib-contract-production-stdout.log
+stderr_logfile={PROJECT_ROOT}/logs/ib-contract-production-stderr.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=5
+stderr_logfile_backups=5
+"""
     
-    # Set environment variables for production services (fixed values)
-    env['ENV_IB_STREAM_PROD_PORT'] = '8851'
-    env['ENV_IB_STREAM_PROD_CLIENT_ID'] = '851'
-    env['ENV_IB_CONTRACT_PROD_PORT'] = '8861'
-    env['ENV_IB_CONTRACT_PROD_CLIENT_ID'] = '852'
+    # Write the concrete configuration
+    supervisor_config_path = PROJECT_ROOT / 'supervisor.conf'
+    with open(supervisor_config_path, 'w') as f:
+        f.write(config_template)
+
+
+def show_resolved_config(env, environment):
+    """Show the supervisor configuration with all variables resolved"""
+    import re
     
-    # Always use the unified supervisor.conf
-    return ([str(PROJECT_ROOT / '.venv' / 'bin' / 'supervisorctl'), '-c', 'supervisor.conf'], env)
+    echo(style(f"🔍 Resolved supervisor.conf for {environment} environment:", fg='cyan', bold=True))
+    echo()
+    
+    # Show environment variables that will be used
+    echo(style("Environment Variables:", fg='yellow', bold=True))
+    relevant_vars = {k: v for k, v in env.items() if k.startswith('ENV_')}
+    for key, value in sorted(relevant_vars.items()):
+        echo(style(f"  {key}", fg='green') + f" = {value}")
+    echo()
+    
+    # Read and resolve the supervisor config
+    supervisor_config_path = PROJECT_ROOT / 'supervisor.conf'
+    if not supervisor_config_path.exists():
+        echo(style("❌ supervisor.conf not found!", fg='red'))
+        return
+    
+    try:
+        with open(supervisor_config_path, 'r') as f:
+            config_content = f.read()
+        
+        # Perform environment variable substitution
+        def substitute_var(match):
+            var_name = match.group(1)
+            if var_name in env:
+                return env[var_name]
+            else:
+                return f"<UNRESOLVED:{var_name}>"
+        
+        # Replace %(VAR_NAME)s patterns with environment variable values
+        resolved_content = re.sub(r'%\(([^)]+)\)s', substitute_var, config_content)
+        
+        echo(style("Resolved Configuration:", fg='yellow', bold=True))
+        echo(style("─" * 60, fg='blue'))
+        echo(resolved_content)
+        echo(style("─" * 60, fg='blue'))
+        
+        # Check for unresolved variables
+        unresolved = re.findall(r'<UNRESOLVED:([^>]+)>', resolved_content)
+        if unresolved:
+            echo()
+            echo(style("⚠️  Unresolved variables found:", fg='red', bold=True))
+            for var in set(unresolved):
+                echo(style(f"  - {var}", fg='red'))
+        else:
+            echo()
+            echo(style("✅ All variables resolved successfully!", fg='green', bold=True))
+            
+    except Exception as e:
+        echo(style(f"❌ Error reading supervisor config: {e}", fg='red'))
 
 
 @services.command()
 @click.option('--environment', type=click.Choice(['development', 'production']), 
               default='production', help='Target environment')
-def start(environment):
+@click.option('--dry-run', is_flag=True, help='Show resolved configuration without starting services')
+def start(environment, dry_run):
     """Start services with supervisor"""
     ensure_venv()
     ensure_supervisor_config()
     
-    echo(style(f"Starting services in {environment} mode...", fg='yellow'))
-    
     # Set environment variables (reuse the same logic as get_supervisorctl)
     _, env = get_supervisorctl()
+    
+    if dry_run:
+        show_resolved_config(env, environment)
+        return
+    
+    echo(style(f"Starting services in {environment} mode...", fg='yellow'))
     
     socket_file = PROJECT_ROOT / 'supervisor.sock'
     
@@ -437,9 +601,9 @@ print(f'Storage: {config.storage.enable_storage}')
     echo(style("Testing with sample contract using localhost:4002...", fg='yellow'))
     # Use direct connection test to localhost:4002 with unique client ID
     env = os.environ.copy()
-    env['IB_HOST'] = 'localhost'
-    env['IB_PORTS'] = '[4002]'
-    env['IB_CLIENT_ID'] = '777'  # Use unique client ID for testing
+    env['IB_STREAM_HOST'] = 'localhost'
+    env['IB_STREAM_PORTS'] = '4002'
+    env['IB_STREAM_CLIENT_ID'] = '777'  # Use unique client ID for testing
     env['IB_ENVIRONMENT'] = 'test'
     
     # Simple connection test using StreamingApp directly
@@ -450,9 +614,9 @@ from ib_stream.streaming_app import StreamingApp
 from ib_stream.config_v2 import create_config
 
 # Set test environment variables for config
-os.environ['IB_HOST'] = 'localhost'
-os.environ['IB_PORTS'] = '[4002]'
-os.environ['IB_CLIENT_ID'] = '777'
+os.environ['IB_STREAM_HOST'] = 'localhost'
+os.environ['IB_STREAM_PORTS'] = '4002'
+os.environ['IB_STREAM_CLIENT_ID'] = '777'
 os.environ['IB_ENVIRONMENT'] = 'development'
 os.environ['IB_STREAM_ENABLE_STORAGE'] = 'false'
 
