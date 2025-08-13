@@ -33,7 +33,12 @@ def setup_health_endpoints(app, config):
             stream_lock = app_state['stream_lock']
             
             tws_connected = tws_app is not None and tws_app.is_connected()
+            
+            # Clear active streams if connection is lost
             with stream_lock:
+                if not tws_connected and active_streams:
+                    logger.warning("TWS disconnected - clearing %d orphaned active streams", len(active_streams))
+                    active_streams.clear()
                 active_stream_count = len(active_streams)
 
             storage_status = None

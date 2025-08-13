@@ -43,6 +43,12 @@ class BackgroundStreamManager:
         self.last_data_timestamps: Dict[int, datetime] = {}  # contract_id -> last_data_time
         self.data_staleness_threshold = timedelta(minutes=5)  # Alert if no data for 5+ minutes
         
+        # Enhanced connection monitoring
+        self.last_connection_check = datetime.now(timezone.utc)
+        self.market_data_farm_status: Dict[str, bool] = {}  # farm_name -> is_connected
+        self.connection_check_interval = 5  # seconds - more frequent monitoring
+        self.market_data_test_interval = 60  # seconds - periodic capability testing
+        
         logger.info("BackgroundStreamManager initialized with %d tracked contracts", 
                    len(self.tracked_contracts))
     
@@ -58,6 +64,10 @@ class BackgroundStreamManager:
         # Connect to stream manager for data staleness tracking
         from .stream_manager import stream_manager
         stream_manager.set_background_stream_manager(self)
+        
+        # Connect to error handler for farm status tracking
+        from ib_util.error_handler import set_background_stream_manager
+        set_background_stream_manager(self)
         
         # Start connection management task with exception monitoring
         self.connection_task = asyncio.create_task(self._manage_connection())
@@ -116,6 +126,8 @@ class BackgroundStreamManager:
                 if was_connected and not is_connected:
                     logger.warning("TWS disconnection detected, clearing active streams")
                     await self._handle_disconnection()
+                elif is_connected and not was_connected:
+                    logger.info("TWS connection established")
                 
                 # Ensure TWS connection
                 if not is_connected:
@@ -131,8 +143,8 @@ class BackgroundStreamManager:
                 
                 was_connected = is_connected
                 
-                # Wait before next check
-                await asyncio.sleep(10)
+                # Wait before next check (more frequent monitoring)
+                await asyncio.sleep(self.connection_check_interval)
                 
             except asyncio.CancelledError:
                 break
@@ -184,8 +196,13 @@ class BackgroundStreamManager:
                 logger.error("Error in stream monitoring: %s", e)
     
     def _is_connected(self) -> bool:
-        """Check if TWS connection is active"""
-        return self.tws_app is not None and self.tws_app.is_connected()
+        """Check if TWS connection is active and capable of market data"""
+        # Basic socket connection check
+        if not (self.tws_app and self.tws_app.is_connected()):
+            return False
+        
+        # Enhanced check: Verify market data capability
+        return self._has_market_data_capability()
     
     async def _handle_disconnection(self) -> None:
         """Handle TWS disconnection by cleaning up streams"""
@@ -205,6 +222,21 @@ class BackgroundStreamManager:
             # Clear all tracking dictionaries
             self.active_streams.clear()
             self.stream_handlers.clear()
+            
+            # Also clear the main app state active_streams if accessible
+            try:
+                from .app_lifecycle import get_app_state
+                app_state = get_app_state()
+                main_active_streams = app_state.get('active_streams', {})
+                stream_lock = app_state.get('stream_lock')
+                
+                if stream_lock and main_active_streams:
+                    with stream_lock:
+                        if main_active_streams:
+                            logger.info("Clearing %d orphaned main active streams after disconnection", len(main_active_streams))
+                            main_active_streams.clear()
+            except Exception as e:
+                logger.debug("Could not clear main active streams: %s", e)
             
             logger.info("Cleared all active streams after disconnection")
             
@@ -473,6 +505,57 @@ class BackgroundStreamManager:
         """Update the last data timestamp for a contract"""
         self.last_data_timestamps[contract_id] = datetime.now(timezone.utc)
         logger.debug("Updated data timestamp for contract %d", contract_id)
+    
+    def _has_market_data_capability(self) -> bool:
+        """Check if TWS has market data capability beyond basic socket connection"""
+        try:
+            # If we have no tracked market data farm status, assume connected for now
+            if not self.market_data_farm_status:
+                return True
+                
+            # Check if critical market data farms are connected
+            critical_farms = ['usfarm', 'usfuture', 'cashfarm']
+            for farm in critical_farms:
+                if farm in self.market_data_farm_status:
+                    if self.market_data_farm_status[farm]:
+                        return True  # At least one critical farm is connected
+            
+            # If we have farm status but none of the critical ones are connected
+            if self.market_data_farm_status:
+                logger.warning("No critical market data farms connected: %s", 
+                             self.market_data_farm_status)
+                return False
+                
+            # Default to true if we can't determine farm status
+            return True
+            
+        except Exception as e:
+            logger.error("Error checking market data capability: %s", e)
+            return True  # Fail open - assume connected to avoid false disconnections
+    
+    def update_market_data_farm_status(self, farm_name: str, is_connected: bool) -> None:
+        """Update market data farm connection status"""
+        previous_status = self.market_data_farm_status.get(farm_name, None)
+        self.market_data_farm_status[farm_name] = is_connected
+        
+        if previous_status is not None and previous_status != is_connected:
+            status_text = "connected" if is_connected else "disconnected"
+            logger.info("Market data farm %s status changed: %s", farm_name, status_text)
+            
+            # If a critical farm disconnected, log as warning
+            if not is_connected and farm_name in ['usfarm', 'usfuture', 'cashfarm']:
+                logger.warning("CRITICAL: Market data farm %s disconnected", farm_name)
+    
+    async def _test_market_data_capability(self) -> bool:
+        """Periodically test actual market data capability"""
+        try:
+            # This could be enhanced to make a test market data request
+            # For now, we rely on farm status monitoring
+            return self._has_market_data_capability()
+            
+        except Exception as e:
+            logger.error("Error testing market data capability: %s", e)
+            return False
     
     async def _handle_stream_error(self, error_code: str, error_message: str) -> None:
         """Handle stream errors"""

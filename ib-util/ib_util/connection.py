@@ -122,8 +122,25 @@ class IBConnection(EWrapper, EClient):
             self.api_thread.join(timeout=2)
     
     def is_connected(self) -> bool:
-        """Check if properly connected (nextValidId received)"""
-        return self.connected and self.next_valid_id is not None
+        """Check if properly connected with live socket verification"""
+        # First check basic connection state
+        if not (self.connected and self.next_valid_id is not None):
+            return False
+        
+        # Verify the underlying socket is still alive
+        try:
+            # Check if the socket is still connected by getting its state
+            if hasattr(self, 'client') and hasattr(self.client, 'isConnected'):
+                socket_alive = self.client.isConnected()
+                if not socket_alive:
+                    logger.warning("Socket connection lost, marking as disconnected")
+                    self.connected = False
+                    return False
+            return True
+        except Exception as e:
+            logger.warning("Connection verification failed: %s", e)
+            self.connected = False
+            return False
     
     def wait_for_connection(self, timeout: float = None) -> bool:
         """
