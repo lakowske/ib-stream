@@ -29,10 +29,9 @@ from .loader import (
     validate_configuration
 )
 from .compat import (
-    ConfigMigrator,
     create_compatible_config,
     migrate_legacy_config_object,
-    validate_migration
+    validate_v2_config
 )
 
 __all__ = [
@@ -56,8 +55,7 @@ __all__ = [
     'validate_configuration',
     
     # Compatibility layer
-    'ConfigMigrator',
     'create_compatible_config',
     'migrate_legacy_config_object',
-    'validate_migration',
+    'validate_v2_config',
 ]

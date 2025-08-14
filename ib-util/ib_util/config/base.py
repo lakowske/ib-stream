@@ -34,7 +34,9 @@ class IBConnectionConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="IB_",
         # Disable JSON parsing for lists to allow custom parsing
-        env_parse_none_str="null"
+        env_parse_none_str="null",
+        # Disable complex parsing for environment variables
+        env_ignore_empty=True,
     )
         
     @field_validator('ports', mode='before')

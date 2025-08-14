@@ -89,8 +89,8 @@ def validate(verbose):
     echo(style("Validating configuration system...", fg='yellow'))
     
     try:
-        from ib_util.config.compat import validate_migration
-        result = validate_migration()
+        from ib_util.config.compat import validate_v2_config
+        result = validate_v2_config()
         
         if result['valid']:
             echo(style("✓ Configuration system is healthy", fg='green'))
@@ -146,10 +146,20 @@ def show(service, output_format):
                     for key, value in vars(config).items():
                         echo(f"  {key}: {value}")
             else:  # summary
-                echo(f"  Host: {getattr(config, 'host', 'N/A')}")
-                echo(f"  Client ID: {getattr(config, 'client_id', 'N/A')}")
-                echo(f"  Server Port: {getattr(config, 'server_port', 'N/A')}")
-                echo(f"  Storage: {getattr(getattr(config, 'storage', None), 'enable_storage', 'N/A')}")
+                # Access nested v2 configuration structure
+                connection = getattr(config, 'connection', None)
+                server = getattr(config, 'server', None)
+                storage = getattr(config, 'storage', None)
+                
+                host = getattr(connection, 'host', 'N/A') if connection else 'N/A'
+                client_id = getattr(connection, 'client_id', 'N/A') if connection else 'N/A'
+                server_port = getattr(server, 'port', 'N/A') if server else 'N/A'
+                storage_enabled = getattr(storage, 'enable_storage', 'N/A') if storage else 'N/A'
+                
+                echo(f"  Host: {host}")
+                echo(f"  Client ID: {client_id}")
+                echo(f"  Server Port: {server_port}")
+                echo(f"  Storage: {storage_enabled}")
                 
         except Exception as e:
             echo(style(f"  Error loading configuration: {e}", fg='red'))
