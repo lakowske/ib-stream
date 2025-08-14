@@ -108,6 +108,8 @@ class ConfigMigrator:
             'enable_json': legacy_env.get('IB_STREAM_ENABLE_JSON', 'true').lower() == 'true',
             'enable_protobuf': legacy_env.get('IB_STREAM_ENABLE_PROTOBUF', 'false').lower() == 'true',
             'enable_postgres': legacy_env.get('IB_STREAM_ENABLE_POSTGRES', 'false').lower() == 'true',
+            'enable_v2_storage': legacy_env.get('IB_STREAM_ENABLE_V2_STORAGE', 'true').lower() == 'true',
+            'enable_v3_storage': legacy_env.get('IB_STREAM_ENABLE_V3_STORAGE', 'true').lower() == 'true',
             'enable_background_streaming': legacy_env.get('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'false').lower() == 'true',
             'tracked_contracts': legacy_env.get('IB_STREAM_TRACKED_CONTRACTS', ''),
             'buffer_size': int(legacy_env.get('IB_STREAM_BUFFER_SIZE', '100')),

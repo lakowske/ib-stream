@@ -79,6 +79,7 @@ class IBStorageConfig(BaseSettings):
     enable_protobuf: bool = Field(default=True, description="Enable Protobuf storage") 
     enable_postgres: bool = Field(default=False, description="Enable PostgreSQL indexing")
     enable_metrics: bool = Field(default=True, description="Enable storage metrics")
+    enable_v2_storage: bool = Field(default=True, description="Enable v2 legacy storage format")
     enable_v3_storage: bool = Field(default=True, description="Enable v3 optimized storage")
     
     # Background streaming
@@ -199,6 +200,8 @@ class IBBaseConfig(BaseSettings):
         env_dict["IB_STREAM_ENABLE_PROTOBUF"] = str(self.storage.enable_protobuf).lower()
         env_dict["IB_STREAM_ENABLE_POSTGRES"] = str(self.storage.enable_postgres).lower()
         env_dict["IB_STREAM_ENABLE_METRICS"] = str(self.storage.enable_metrics).lower()
+        env_dict["IB_STREAM_ENABLE_V2_STORAGE"] = str(self.storage.enable_v2_storage).lower()
+        env_dict["IB_STREAM_ENABLE_V3_STORAGE"] = str(self.storage.enable_v3_storage).lower()
         env_dict["IB_STREAM_ENABLE_BACKGROUND_STREAMING"] = str(self.storage.enable_background_streaming).lower()
         env_dict["IB_STREAM_TRACKED_CONTRACTS"] = self.storage.tracked_contracts
         env_dict["IB_STREAM_BUFFER_SIZE"] = str(self.storage.buffer_size)

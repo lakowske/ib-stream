@@ -88,16 +88,23 @@ class IBStreamAPIServer(BaseAPIServer):
             self.logger.info("  JSON enabled: %s", self.stream_config.storage.enable_json)
             self.logger.info("  Protobuf enabled: %s", self.stream_config.storage.enable_protobuf)
             self.logger.info("  PostgreSQL enabled: %s", self.stream_config.storage.enable_postgres_index)
+            self.logger.info("  V2 storage enabled: %s", self.stream_config.storage.enable_v2_storage)
+            self.logger.info("  V3 storage enabled: %s", self.stream_config.storage.enable_v3_storage)
             
             try:
                 from pathlib import Path
+                
+                # Determine v3_only_mode based on v2 storage flag
+                v3_only_mode = not self.stream_config.storage.enable_v2_storage
+                
                 self.storage = MultiStorageV3(
                     storage_path=Path(self.stream_config.storage.storage_base_path),
-                    enable_v2_json=self.stream_config.storage.enable_json,
-                    enable_v2_protobuf=self.stream_config.storage.enable_protobuf,
-                    enable_v3_json=True,
-                    enable_v3_protobuf=True,
-                    enable_metrics=self.stream_config.storage.enable_metrics
+                    enable_v2_json=self.stream_config.storage.enable_json and self.stream_config.storage.enable_v2_storage,
+                    enable_v2_protobuf=self.stream_config.storage.enable_protobuf and self.stream_config.storage.enable_v2_storage,
+                    enable_v3_json=self.stream_config.storage.enable_v3_storage,
+                    enable_v3_protobuf=self.stream_config.storage.enable_v3_storage,
+                    enable_metrics=self.stream_config.storage.enable_metrics,
+                    v3_only_mode=v3_only_mode
                 )
                 await self.storage.start()
                 self.logger.info("Storage system initialized successfully")

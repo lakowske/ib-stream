@@ -126,6 +126,16 @@ class BaseStorageConfigAdapter:
         return self._storage_config.enable_protobuf
     
     @property
+    def enable_v2_storage(self) -> bool:
+        """Whether v2 legacy storage format is enabled."""
+        return getattr(self._storage_config, 'enable_v2_storage', True)
+    
+    @property
+    def enable_v3_storage(self) -> bool:
+        """Whether v3 optimized storage format is enabled."""
+        return getattr(self._storage_config, 'enable_v3_storage', True)
+    
+    @property
     def use_compression(self) -> bool:
         """Whether storage compression is enabled."""
         return self._storage_config.use_compression
@@ -137,6 +147,8 @@ class BaseStorageConfigAdapter:
             'storage_base_path': self.storage_base_path,
             'enable_json': self.enable_json,
             'enable_protobuf': self.enable_protobuf,
+            'enable_v2_storage': self.enable_v2_storage,
+            'enable_v3_storage': self.enable_v3_storage,
             'use_compression': self.use_compression,
         }
 
