@@ -8,6 +8,19 @@ and other IB API services. It centralizes error code interpretation and logging.
 import logging
 from typing import Optional, Callable, Any
 
+# Global reference to background stream manager for farm status updates
+_background_stream_manager = None
+
+def set_background_stream_manager(manager):
+    """Set the background stream manager for farm status updates"""
+    global _background_stream_manager
+    _background_stream_manager = manager
+
+def _update_farm_status(farm_name: str, is_connected: bool):
+    """Update farm status in background stream manager if available"""
+    if _background_stream_manager and hasattr(_background_stream_manager, 'update_market_data_farm_status'):
+        _background_stream_manager.update_market_data_farm_status(farm_name, is_connected)
+
 
 def handle_tws_error(
     req_id: int, 
@@ -117,6 +130,18 @@ def handle_streaming_error(
         elif error_code in [2104, 2106, 2158]:
             # Market data farm connection messages - can ignore
             logger.info(f"Connection status: {error_string}")
+            
+            # Extract farm name and status for enhanced monitoring
+            try:
+                if "Market data farm connection is OK:" in error_string:
+                    farm_name = error_string.split(":")[-1].strip()
+                    _update_farm_status(farm_name, True)
+                elif "Market data farm connection is inactive:" in error_string:
+                    farm_name = error_string.split(":")[-1].strip()
+                    _update_farm_status(farm_name, False)
+            except Exception as e:
+                logger.debug("Error parsing farm status: %s", e)
+            
             # Don't call error_callback for informational messages
             
         else:

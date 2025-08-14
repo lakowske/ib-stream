@@ -287,7 +287,19 @@ class IBStreamAPIServer(BaseAPIServer):
             active_streams = app_state.get('active_streams', {})
             stream_lock = app_state.get('stream_lock')
             
-            tws_connected = tws_app is not None and tws_app.is_connected()
+            # Check both main service and background streaming TWS connections
+            main_tws_connected = tws_app is not None and tws_app.is_connected()
+            
+            # Check background streaming connection status
+            background_tws_connected = False
+            background_stream_count = 0
+            if background_manager:
+                bg_status = background_manager.get_status()
+                background_tws_connected = bg_status.get('tws_connected', False)
+                background_stream_count = bg_status.get('total_streams', 0)
+            
+            # Overall TWS connectivity - connected if either main OR background is connected
+            tws_connected = main_tws_connected or background_tws_connected
             
             # Get active stream count safely
             active_stream_count = 0
@@ -332,7 +344,15 @@ class IBStreamAPIServer(BaseAPIServer):
                 status=status,
                 details={
                     "tws_connected": tws_connected,
+                    "connection_details": {
+                        "main_service_connected": main_tws_connected,
+                        "background_streaming_connected": background_tws_connected,
+                        "main_client_id": self.stream_config.client_id,
+                        "background_client_id": self.stream_config.client_id + 1000 if background_manager else None
+                    },
                     "active_streams": active_stream_count,
+                    "background_streams": background_stream_count,
+                    "total_active_streams": active_stream_count + background_stream_count,
                     "max_streams": self.stream_config.max_concurrent_streams,
                     "client_id": self.stream_config.client_id,
                     "connection_ports": self.stream_config.ports,
