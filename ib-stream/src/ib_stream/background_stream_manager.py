@@ -11,7 +11,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set
 
-from .config import TrackedContract
+from ib_util import ConnectionConfig
+from .config import TrackedContract, create_config
 from .stream_manager import stream_manager, StreamHandler
 from .streaming_app import StreamingApp
 
@@ -46,8 +47,10 @@ class BackgroundStreamManager:
         # Enhanced connection monitoring
         self.last_connection_check = datetime.now(timezone.utc)
         self.market_data_farm_status: Dict[str, bool] = {}  # farm_name -> is_connected
-        self.connection_check_interval = 5  # seconds - more frequent monitoring
+        self.connection_check_interval = 2  # seconds - very frequent monitoring
         self.market_data_test_interval = 60  # seconds - periodic capability testing
+        self.max_reconnect_delay = 30  # max delay between reconnection attempts
+        self.connection_failures = 0  # track consecutive failures
         
         logger.info("BackgroundStreamManager initialized with %d tracked contracts", 
                    len(self.tracked_contracts))
@@ -115,42 +118,68 @@ class BackgroundStreamManager:
         logger.info("Background streaming stopped")
     
     async def _manage_connection(self) -> None:
-        """Manage TWS connection and stream lifecycle"""
+        """Manage TWS connection and stream lifecycle with persistent reconnection"""
         was_connected = False
+        last_connection_log = datetime.now(timezone.utc)
+        
+        logger.info("Starting connection management loop")
         
         while self.running:
             try:
+                current_time = datetime.now(timezone.utc)
                 is_connected = self._is_connected()
+                
+                # Log connection status periodically for monitoring
+                if (current_time - last_connection_log).total_seconds() > 60:  # Every minute
+                    logger.debug("Connection monitor: connected=%s, failures=%d", 
+                                is_connected, self.connection_failures)
+                    last_connection_log = current_time
                 
                 # Detect disconnection
                 if was_connected and not is_connected:
-                    logger.warning("TWS disconnection detected, clearing active streams")
+                    self.connection_failures += 1
+                    logger.error("TWS disconnection detected - failure count: %d, clearing active streams", 
+                                self.connection_failures)
                     await self._handle_disconnection()
                 elif is_connected and not was_connected:
-                    logger.info("TWS connection established")
+                    self.connection_failures = 0  # Reset failure counter on successful connection
+                    logger.info("TWS connection established successfully")
                 
-                # Ensure TWS connection
+                # ALWAYS try to connect if not connected - this is the key fix
                 if not is_connected:
+                    # Calculate delay based on failure count (exponential backoff, capped)
+                    delay = min(self.max_reconnect_delay, 5 + (self.connection_failures * 2))
+                    logger.info("Attempting reconnection in %d seconds (failure count: %d)", 
+                               delay, self.connection_failures + 1)
+                    
+                    await asyncio.sleep(delay)
                     await self._establish_connection()
-                    # After successful connection, force restart all streams
+                    
+                    # Check if connection succeeded
                     if self._is_connected():
-                        logger.info("TWS reconnected, restarting all tracked streams")
+                        logger.info("TWS reconnected successfully, restarting all tracked streams")
+                        self.connection_failures = 0
                         await self._start_tracked_streams()
+                    else:
+                        self.connection_failures += 1
+                        logger.warning("Reconnection attempt failed (failure count: %d)", self.connection_failures)
                 
-                # Start streams for new/missing contracts
+                # Start streams for new/missing contracts if connected
                 elif is_connected:
                     await self._start_tracked_streams()
                 
                 was_connected = is_connected
                 
-                # Wait before next check (more frequent monitoring)
+                # Wait before next check - shorter interval for better monitoring
                 await asyncio.sleep(self.connection_check_interval)
                 
             except asyncio.CancelledError:
+                logger.info("🛑 Connection management loop cancelled")
                 break
             except Exception as e:
-                logger.error("Error in connection management: %s", e)
-                await asyncio.sleep(self.reconnect_delay)
+                logger.error("💥 Critical error in connection management: %s", e, exc_info=True)
+                # Don't let exceptions break the connection management loop
+                await asyncio.sleep(self.connection_check_interval)
     
     async def _monitor_streams(self) -> None:
         """Monitor stream health and restart if needed"""
@@ -201,6 +230,51 @@ class BackgroundStreamManager:
         if not (self.tws_app and self.tws_app.is_connected()):
             return False
         
+        # Test actual connectivity by attempting a simple request every 10 seconds (more frequent)
+        current_time = datetime.now(timezone.utc)
+        time_since_last_test = 0
+        if hasattr(self, '_last_connection_test'):
+            time_since_last_test = (current_time - self._last_connection_test).total_seconds()
+        
+        if not hasattr(self, '_last_connection_test') or time_since_last_test > 10:
+            self._last_connection_test = current_time
+            
+            # Try to make a simple request to test if connection is actually alive
+            # This forces the IB API to try sending data, which will trigger disconnection detection
+            try:
+                # Access the underlying IBConnection which has the IB API methods
+                connection = getattr(self.tws_app, '_ib_connection', None)
+                
+                if connection and hasattr(connection, 'reqCurrentTime'):
+                    # Request current time as a simple connectivity test
+                    connection.reqCurrentTime()
+                    
+                    # Wait briefly to allow error 504 to be processed
+                    time.sleep(0.1)
+                    
+                    # Check if the connection was marked as disconnected by error handler
+                    if not connection.is_connected():
+                        logger.warning("Connectivity test revealed disconnection")
+                        return False
+                        
+                elif connection and hasattr(connection, 'reqServerVersion'):
+                    # Alternative test request  
+                    connection.reqServerVersion()
+                    
+                    # Wait briefly to allow error processing
+                    time.sleep(0.1)
+                    
+                    if not connection.is_connected():
+                        logger.warning("Connectivity test revealed disconnection")
+                        return False
+                        
+                else:
+                    logger.warning("Cannot send connectivity test - connection unavailable")
+                    return False
+            except Exception as e:
+                logger.warning("Connection test failed: %s", e)
+                return False
+        
         # Enhanced check: Verify market data capability
         return self._has_market_data_capability()
     
@@ -244,14 +318,19 @@ class BackgroundStreamManager:
             logger.error("Error handling disconnection: %s", e)
     
     async def _establish_connection(self) -> None:
-        """Establish TWS connection for background streaming"""
+        """Establish TWS connection for background streaming with detailed logging"""
         try:
-            logger.info("Establishing TWS connection for background streaming...")
+            logger.debug("Establishing TWS connection for background streaming")
+            
+            # Clean up existing connection if any
+            if self.tws_app:
+                try:
+                    self.tws_app.disconnect()
+                except Exception as e:
+                    logger.debug("Error disconnecting old connection: %s", e)
+                self.tws_app = None
             
             # Create StreamingApp with background-specific client ID
-            from ib_util import ConnectionConfig
-            from .config import create_config
-            
             # Use the same connection configuration as the main service
             main_config = create_config()
             
@@ -263,9 +342,18 @@ class BackgroundStreamManager:
                 connection_timeout=main_config.connection_timeout
             )
             
+            logger.debug("Attempting connection to %s:%s with client ID %d", 
+                        background_config.host, background_config.ports, background_config.client_id)
+            
             self.tws_app = StreamingApp(json_output=True, config=background_config)
             
-            if not self.tws_app.connect_and_start():
+            # Add disconnection callback to immediately detect disconnections
+            if hasattr(self.tws_app, 'on_disconnected'):
+                self.tws_app.on_disconnected = self._on_connection_lost
+            
+            connection_success = self.tws_app.connect_and_start()
+            
+            if not connection_success:
                 logger.error("Failed to connect to TWS for background streaming")
                 self.tws_app = None
                 return
@@ -274,7 +362,13 @@ class BackgroundStreamManager:
             logger.info("Background TWS connection established successfully")
             
         except Exception as e:
-            logger.error("Failed to establish TWS connection for background streaming: %s", e)
+            logger.error("Failed to establish TWS connection for background streaming: %s", e, exc_info=True)
+            self.tws_app = None
+    
+    def _on_connection_lost(self):
+        """Callback when connection is lost"""
+        logger.warning("Connection lost callback triggered")
+        if self.tws_app:
             self.tws_app = None
     
     async def _start_tracked_streams(self) -> None:

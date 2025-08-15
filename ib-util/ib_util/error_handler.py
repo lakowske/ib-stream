@@ -127,6 +127,13 @@ def handle_streaming_error(
             if error_callback:
                 error_callback("CONTRACT_NOT_FOUND", error_msg)
                 
+        elif error_code in [504, 1100, 1101, 1102]:
+            # Critical connection errors that indicate disconnection
+            error_msg = f"Critical connection error {error_code}: {error_string}"
+            logger.warning(error_msg)
+            if error_callback:
+                error_callback("CRITICAL_CONNECTION_ERROR", error_msg)
+                
         elif error_code in [2104, 2106, 2158]:
             # Market data farm connection messages - can ignore
             logger.info(f"Connection status: {error_string}")

@@ -114,6 +114,14 @@ class StreamingApp(EWrapper):
     def error(self, reqId, errorCode, errorString, _advancedOrderRejectJson=""):
         """Handle errors from TWS using standardized error handling."""
         from ib_util import handle_streaming_error
+        
+        # For critical connection errors, delegate to IBConnection's error handler first
+        # This ensures disconnection state is properly updated
+        if errorCode in [504, 1100, 1101, 1102]:
+            logger.debug("Critical error %d detected, delegating to IBConnection error handler", errorCode)
+            self._ib_connection.error(reqId, errorCode, errorString, _advancedOrderRejectJson)
+        
+        # Then handle with streaming-specific error handling
         handle_streaming_error(reqId, errorCode, errorString, logger, self.error_callback)
 
     def nextValidId(self, orderId):

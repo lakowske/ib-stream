@@ -6,6 +6,7 @@ connection lifecycle, including the full handshake process.
 """
 
 import logging
+import socket
 import threading
 import time
 from typing import Optional, Callable, Any
@@ -63,7 +64,10 @@ class IBConnection(EWrapper, EClient):
     def connectionClosed(self):
         """Called when connection is closed"""
         self.connected = False
+        self.next_valid_id = None  # Clear this too to ensure is_connected() returns False
         self.connection_event.clear()
+        
+        logger.warning("TWS connection closed")
         
         if self.on_disconnected:
             self.on_disconnected()
@@ -72,6 +76,14 @@ class IBConnection(EWrapper, EClient):
         
     def error(self, reqId: int, errorCode: int, errorString: str, advancedOrderRejectJson: str = ""):
         """Handle API errors using standardized error handling"""
+        # Check for critical connection errors that indicate disconnection
+        if errorCode in [504, 1100, 1101, 1102]:  # Not connected, connectivity issues
+            logger.warning("Critical connection error %d: %s", errorCode, errorString)
+            self.connected = False
+            self.next_valid_id = None
+            if self.on_disconnected:
+                self.on_disconnected()
+        
         from .error_handler import handle_tws_error
         handle_tws_error(reqId, errorCode, errorString, logger, self.on_error)
     
@@ -127,19 +139,36 @@ class IBConnection(EWrapper, EClient):
         if not (self.connected and self.next_valid_id is not None):
             return False
         
-        # Verify the underlying socket is still alive
+        # Verify the underlying socket is still alive using IB API patterns
         try:
-            # Check if the socket is still connected by getting its state
-            if hasattr(self, 'client') and hasattr(self.client, 'isConnected'):
-                socket_alive = self.client.isConnected()
+            # Check if the socket is still connected
+            if hasattr(self, 'conn') and hasattr(self.conn, 'isConnected'):
+                socket_alive = self.conn.isConnected()
                 if not socket_alive:
-                    logger.warning("Socket connection lost, marking as disconnected")
+                    logger.warning("Socket connection lost (conn.isConnected=False)")
                     self.connected = False
+                    self.next_valid_id = None
                     return False
+            
+            # Additional check: try to get socket state directly
+            if hasattr(self, 'conn') and hasattr(self.conn, 'socket') and self.conn.socket:
+                try:
+                    # Use socket.getpeername() to test if socket is connected
+                    # This will raise an exception if socket is not connected
+                    self.conn.socket.getpeername()
+                except (OSError, socket.error, AttributeError) as e:
+                    logger.warning("Socket state check failed: %s", e)
+                    self.connected = False
+                    self.next_valid_id = None
+                    # Trigger connectionClosed callback like IB API does
+                    self.connectionClosed()
+                    return False
+            
             return True
         except Exception as e:
             logger.warning("Connection verification failed: %s", e)
             self.connected = False
+            self.next_valid_id = None
             return False
     
     def wait_for_connection(self, timeout: float = None) -> bool:
