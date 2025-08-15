@@ -371,6 +371,7 @@ class BackgroundStreamManager:
         if self.tws_app:
             self.tws_app = None
     
+    
     async def _start_tracked_streams(self) -> None:
         """Start streams for all tracked contracts"""
         for contract_id, contract in self.tracked_contracts.items():
@@ -431,31 +432,25 @@ class BackgroundStreamManager:
                     # Start the stream with specific request ID
                     # Note: We need to manually set up the stream since StreamingApp.stream_contract
                     # uses its own request ID management
-                    from ib_util import create_contract_by_id
                     
-                    # Create contract using ib-util factory
-                    contract = create_contract_by_id(contract_id)
+                    # Get complete contract information from ib-contract service
+                    from .contract_client import get_contract_by_id
+                    contract = await get_contract_by_id(contract_id)
                     
-                    # Request contract details first
-                    self.tws_app.reqContractDetails(request_id, contract)
-                    
-                    # Wait briefly for contract details
-                    await asyncio.sleep(0.5)
-                    
-                    # Start tick-by-tick data with our request ID
-                    if request_id in self.tws_app.contract_details_by_req_id:
-                        contract_details = self.tws_app.contract_details_by_req_id[request_id]
-                        self.tws_app.reqTickByTickData(
-                            reqId=request_id,
-                            contract=contract_details.contract,
-                            tickType=tws_tick_type,
-                            numberOfTicks=0,
-                            ignoreSize=False
-                        )
-                    else:
-                        logger.error("Could not get contract details for contract %d, request_id %d", 
-                                   contract_id, request_id)
+                    if contract is None:
+                        logger.error("Could not get contract details for contract %d from ib-contract service", contract_id)
+                        # Unregister failed handler
+                        stream_manager.unregister_stream(request_id)
                         continue
+                    
+                    # Start tick-by-tick data with complete contract information
+                    self.tws_app.reqTickByTickData(
+                        reqId=request_id,
+                        contract=contract,
+                        tickType=tws_tick_type,
+                        numberOfTicks=0,
+                        ignoreSize=False
+                    )
                     
                     contract_streams[tick_type] = request_id
                     self.stream_handlers[request_id] = handler

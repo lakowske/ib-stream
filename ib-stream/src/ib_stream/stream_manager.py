@@ -43,7 +43,7 @@ class StreamHandler:
         self.tick_count = 0
         self.streaming_stopped = False
         self.start_time = time.time()
-        self.contract_details = None
+        # Note: Contract details removed - use ib-contract service if needed
         
         if stream_id:
             logger.info("Created StreamHandler for request_id %d (stream_id %s), contract %d, type %s", 

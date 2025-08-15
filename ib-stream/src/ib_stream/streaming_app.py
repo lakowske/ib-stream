@@ -51,8 +51,8 @@ class StreamingApp(EWrapper):
         self.json_output = json_output
         self.tick_count = 0
         self.req_id = 1000
-        self.contract_details = None  # Keep for backward compatibility
-        self.contract_details_by_req_id = {}  # Store contract details per request ID
+        # Note: Contract details lookup removed - ib-stream should not perform
+        # contract lookups. Use ib-contract service if contract info is needed.
         self.streaming_stopped = False
 
         # Callback functions for API server
@@ -86,9 +86,7 @@ class StreamingApp(EWrapper):
         self._ib_connection.disconnect()
     
     # Delegate EClient methods to IBConnection
-    def reqContractDetails(self, reqId: int, contract):
-        """Request contract details"""
-        return self._ib_connection.reqContractDetails(reqId, contract)
+    # Note: reqContractDetails removed - use ib-contract service instead
     
     def reqTickByTickData(self, reqId: int, contract, tickType: str, numberOfTicks: int, ignoreSize: bool):
         """Request tick-by-tick data"""
@@ -132,23 +130,7 @@ class StreamingApp(EWrapper):
         # Then do our streaming app specific logging
         logger.info(f"✓ Streaming app ready with ib-util connection. Next valid order ID: {orderId}")
 
-    def contractDetails(self, reqId, contractDetails):
-        """Receive contract details."""
-        # Store contract details by request ID to avoid race conditions
-        self.contract_details_by_req_id[reqId] = contractDetails
-        # Keep backward compatibility
-        self.contract_details = contractDetails
-        contract = contractDetails.contract
-        if not self.json_output:
-            print(
-                f"Streaming {contract.symbol} ({contract.secType}) - {contract.localSymbol}"
-            )
-            print(f"Exchange: {contract.exchange}, Currency: {contract.currency}")
-            print("-" * 80)
-
-    def contractDetailsEnd(self, _reqId):
-        """Called when contract details are complete."""
-        logger.info("Contract details received")
+    # Note: Contract details callbacks removed - use ib-contract service instead
 
     def _process_tick(self, reqId: int, formatter: TickFormatter):
         """Central method to process any type of tick data with StreamManager routing"""
@@ -278,33 +260,23 @@ class StreamingApp(EWrapper):
         formatter = MidPointFormatter(timestamp=time, midpoint=midPoint)
         self._process_tick(reqId, formatter)
 
-    def stream_contract(self, contract_id: int, tick_type: str = "Last"):
+    async def stream_contract(self, contract_id: int, tick_type: str = "Last"):
         """Start streaming tick-by-tick data for a contract."""
-        # Create contract using ib-util factory
-        from ib_util import create_contract_by_id
-        contract = create_contract_by_id(contract_id)
-
-        # Request contract details first
-        self.reqContractDetails(self.req_id, contract)
-
-        # Wait for contract details for this specific request ID
-        timeout = 5
-        start_time = time.time()
-        while self.req_id not in self.contract_details_by_req_id and (time.time() - start_time) < timeout:
-            time.sleep(0.1)
-
-        if self.req_id not in self.contract_details_by_req_id:
+        # Get complete contract information from ib-contract service
+        from .contract_client import get_contract_by_id
+        contract = await get_contract_by_id(contract_id)
+        
+        if contract is None:
+            error_msg = f"Could not get contract details for contract ID {contract_id} from ib-contract service"
+            logger.error(error_msg)
             if not self.json_output:
-                print(f"Error: Could not find contract with ID {contract_id}")
+                print(f"Error: {error_msg}")
             return
 
-        # Get contract details for this specific request ID
-        contract_details = self.contract_details_by_req_id[self.req_id]
-
-        # Request tick-by-tick data using the correct contract
+        # Request tick-by-tick data with complete contract information
         self.reqTickByTickData(
             reqId=self.req_id,
-            contract=contract_details.contract,
+            contract=contract,
             tickType=tick_type,
             numberOfTicks=0,  # 0 means unlimited
             ignoreSize=False,
@@ -318,5 +290,5 @@ class StreamingApp(EWrapper):
 
     def cleanup_request(self, req_id):
         """Clean up data for a specific request ID."""
-        if req_id in self.contract_details_by_req_id:
-            del self.contract_details_by_req_id[req_id]
+        # Note: Contract details cleanup removed since we no longer store contract details
+        pass
