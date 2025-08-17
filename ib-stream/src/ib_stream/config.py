@@ -44,8 +44,16 @@ class StorageConfig:
     
     # Enable/disable storage backends
     enable_storage: bool = True
+    
+    # v2 storage formats (legacy)
     enable_json: bool = True
     enable_protobuf: bool = True
+    
+    # v3 storage formats (optimized, 50%+ space reduction)
+    enable_v3_json: bool = True
+    enable_v3_protobuf: bool = True
+    
+    # Other storage backends
     enable_postgres_index: bool = True
     
     # Control whether client-requested streams are stored to disk
@@ -138,8 +146,16 @@ def load_storage_config_from_env() -> StorageConfig:
     
     # Enable/disable features
     config.enable_storage = os.getenv("IB_STREAM_ENABLE_STORAGE", "true").lower() == "true"
+    
+    # v2 storage formats (legacy)
     config.enable_json = os.getenv("IB_STREAM_ENABLE_JSON", "true").lower() == "true"
     config.enable_protobuf = os.getenv("IB_STREAM_ENABLE_PROTOBUF", "true").lower() == "true"
+    
+    # v3 storage formats (optimized)
+    config.enable_v3_json = os.getenv("IB_STREAM_ENABLE_V3_JSON", "true").lower() == "true"
+    config.enable_v3_protobuf = os.getenv("IB_STREAM_ENABLE_V3_PROTOBUF", "true").lower() == "true"
+    
+    # Other storage backends
     config.enable_postgres_index = os.getenv("IB_STREAM_ENABLE_POSTGRES", "true").lower() == "true"
     config.enable_client_stream_storage = os.getenv("IB_STREAM_ENABLE_CLIENT_STREAM_STORAGE", "true").lower() == "true"
     

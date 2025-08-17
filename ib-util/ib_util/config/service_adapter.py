@@ -126,6 +126,16 @@ class BaseStorageConfigAdapter:
         return self._storage_config.enable_protobuf
     
     @property
+    def enable_v3_json(self) -> bool:
+        """Whether v3 JSON storage is enabled."""
+        return getattr(self._storage_config, 'enable_v3_json', True)
+    
+    @property
+    def enable_v3_protobuf(self) -> bool:
+        """Whether v3 protobuf storage is enabled."""
+        return getattr(self._storage_config, 'enable_v3_protobuf', True)
+    
+    @property
     def use_compression(self) -> bool:
         """Whether storage compression is enabled."""
         return self._storage_config.use_compression
@@ -137,6 +147,8 @@ class BaseStorageConfigAdapter:
             'storage_base_path': self.storage_base_path,
             'enable_json': self.enable_json,
             'enable_protobuf': self.enable_protobuf,
+            'enable_v3_json': self.enable_v3_json,
+            'enable_v3_protobuf': self.enable_v3_protobuf,
             'use_compression': self.use_compression,
         }
 

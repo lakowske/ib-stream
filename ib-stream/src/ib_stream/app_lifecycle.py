@@ -75,8 +75,10 @@ async def lifespan(_):
     if config.storage.enable_storage:
         logger.info("Initializing storage system...")
         logger.info("  Storage path: %s", config.storage.storage_base_path)
-        logger.info("  JSON enabled: %s", config.storage.enable_json)
-        logger.info("  Protobuf enabled: %s", config.storage.enable_protobuf)
+        logger.info("  v2 JSON enabled: %s", config.storage.enable_json)
+        logger.info("  v2 Protobuf enabled: %s", config.storage.enable_protobuf)
+        logger.info("  v3 JSON enabled: %s", config.storage.enable_v3_json)
+        logger.info("  v3 Protobuf enabled: %s", config.storage.enable_v3_protobuf)
         logger.info("  PostgreSQL enabled: %s", config.storage.enable_postgres_index)
         
         try:
@@ -84,8 +86,8 @@ async def lifespan(_):
                 storage_path=config.storage.storage_base_path,
                 enable_v2_json=config.storage.enable_json,
                 enable_v2_protobuf=config.storage.enable_protobuf,
-                enable_v3_json=True,  # Enable v3 JSON storage by default
-                enable_v3_protobuf=True,  # Enable v3 Protobuf storage by default
+                enable_v3_json=config.storage.enable_v3_json,
+                enable_v3_protobuf=config.storage.enable_v3_protobuf,
                 enable_metrics=config.storage.enable_metrics
             )
             await storage.start()

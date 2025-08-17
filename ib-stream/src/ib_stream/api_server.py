@@ -85,8 +85,10 @@ class IBStreamAPIServer(BaseAPIServer):
         if self.stream_config.storage.enable_storage:
             self.logger.info("Initializing storage system...")
             self.logger.info("  Storage path: %s", self.stream_config.storage.storage_base_path)
-            self.logger.info("  JSON enabled: %s", self.stream_config.storage.enable_json)
-            self.logger.info("  Protobuf enabled: %s", self.stream_config.storage.enable_protobuf)
+            self.logger.info("  v2 JSON enabled: %s", self.stream_config.storage.enable_json)
+            self.logger.info("  v2 Protobuf enabled: %s", self.stream_config.storage.enable_protobuf)
+            self.logger.info("  v3 JSON enabled: %s", self.stream_config.storage.enable_v3_json)
+            self.logger.info("  v3 Protobuf enabled: %s", self.stream_config.storage.enable_v3_protobuf)
             self.logger.info("  PostgreSQL enabled: %s", self.stream_config.storage.enable_postgres_index)
             
             try:
@@ -95,8 +97,8 @@ class IBStreamAPIServer(BaseAPIServer):
                     storage_path=Path(self.stream_config.storage.storage_base_path),
                     enable_v2_json=self.stream_config.storage.enable_json,
                     enable_v2_protobuf=self.stream_config.storage.enable_protobuf,
-                    enable_v3_json=True,
-                    enable_v3_protobuf=True,
+                    enable_v3_json=self.stream_config.storage.enable_v3_json,
+                    enable_v3_protobuf=self.stream_config.storage.enable_v3_protobuf,
                     enable_metrics=self.stream_config.storage.enable_metrics
                 )
                 await self.storage.start()
