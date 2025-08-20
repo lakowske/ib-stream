@@ -15,6 +15,10 @@ from ib_util import ConnectionConfig
 from .config import TrackedContract, create_config
 from .stream_manager import stream_manager, StreamHandler
 from .streaming_app import StreamingApp
+from .models.background_health import (
+    BackgroundStreamHealth, ContractHealthStatus, StreamHealthStatus
+)
+from .services.stream_health_service import StreamHealthService
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,8 @@ class BackgroundStreamManager:
     """Manages background streaming for tracked contracts"""
     
     def __init__(self, tracked_contracts: List[TrackedContract], 
-                 reconnect_delay: int = 30):
+                 reconnect_delay: int = 30,
+                 staleness_threshold_minutes: int = 15):
         self.tracked_contracts = {c.contract_id: c for c in tracked_contracts if c.enabled}
         self.reconnect_delay = reconnect_delay
         
@@ -43,6 +48,11 @@ class BackgroundStreamManager:
         # Data staleness monitoring
         self.last_data_timestamps: Dict[int, datetime] = {}  # contract_id -> last_data_time
         self.data_staleness_threshold = timedelta(minutes=5)  # Alert if no data for 5+ minutes
+        
+        # Health monitoring
+        self.health_service = StreamHealthService()
+        self.staleness_threshold_minutes = staleness_threshold_minutes
+        self.last_health_check: Dict[int, datetime] = {}  # contract_id -> last_health_check
         
         # Enhanced connection monitoring
         self.last_connection_check = datetime.now(timezone.utc)
@@ -689,6 +699,146 @@ class BackgroundStreamManager:
         """Get buffer hours for a tracked contract"""
         contract = self.tracked_contracts.get(contract_id)
         return contract.buffer_hours if contract else None
+    
+    async def get_comprehensive_health(self) -> BackgroundStreamHealth:
+        """
+        Get comprehensive health status for all tracked contracts
+        
+        Returns:
+            BackgroundStreamHealth with detailed per-contract assessments
+        """
+        try:
+            health = BackgroundStreamHealth(
+                overall_status=StreamHealthStatus.UNKNOWN,
+                contracts={},
+                last_updated=datetime.now(timezone.utc)
+            )
+            
+            # Assess health for each tracked contract
+            for contract_id, contract in self.tracked_contracts.items():
+                try:
+                    contract_health = await self.health_service.assess_contract_health(
+                        contract_id=contract_id,
+                        symbol=contract.symbol,
+                        expected_streams=contract.tick_types,
+                        active_streams=self.active_streams.get(contract_id, {}),
+                        stream_handlers=self.stream_handlers,
+                        last_data_timestamps=self.last_data_timestamps,
+                        staleness_threshold_minutes=self.staleness_threshold_minutes,
+                        buffer_hours=contract.buffer_hours
+                    )
+                    
+                    health.contracts[contract_id] = contract_health
+                    self.last_health_check[contract_id] = datetime.now(timezone.utc)
+                    
+                except Exception as e:
+                    logger.error("Error assessing health for contract %d: %s", contract_id, e)
+                    # Create minimal health status for failed assessment
+                    health.contracts[contract_id] = ContractHealthStatus(
+                        contract_id=contract_id,
+                        symbol=contract.symbol,
+                        status=StreamHealthStatus.UNKNOWN,
+                        market_status=await self.health_service.get_contract_market_status(contract_id),
+                        connection_issues=[f"Health assessment failed: {str(e)}"]
+                    )
+            
+            # Calculate overall health status
+            health.overall_status = health.calculate_overall_status()
+            
+            logger.debug("Comprehensive health check completed: %s", health.overall_status.value)
+            return health
+            
+        except Exception as e:
+            logger.error("Error performing comprehensive health check: %s", e)
+            # Return minimal health status
+            return BackgroundStreamHealth(
+                overall_status=StreamHealthStatus.UNKNOWN,
+                contracts={},
+                last_updated=datetime.now(timezone.utc)
+            )
+    
+    async def get_contract_health(self, contract_id: int) -> Optional[ContractHealthStatus]:
+        """
+        Get health status for a specific contract
+        
+        Args:
+            contract_id: IB contract ID
+            
+        Returns:
+            ContractHealthStatus or None if contract not tracked
+        """
+        if contract_id not in self.tracked_contracts:
+            return None
+        
+        try:
+            contract = self.tracked_contracts[contract_id]
+            
+            contract_health = await self.health_service.assess_contract_health(
+                contract_id=contract_id,
+                symbol=contract.symbol,
+                expected_streams=contract.tick_types,
+                active_streams=self.active_streams.get(contract_id, {}),
+                stream_handlers=self.stream_handlers,
+                last_data_timestamps=self.last_data_timestamps,
+                staleness_threshold_minutes=self.staleness_threshold_minutes,
+                buffer_hours=contract.buffer_hours
+            )
+            
+            self.last_health_check[contract_id] = datetime.now(timezone.utc)
+            
+            logger.debug("Health check for contract %d (%s): %s", 
+                        contract_id, contract.symbol, contract_health.status.value)
+            
+            return contract_health
+            
+        except Exception as e:
+            logger.error("Error getting health for contract %d: %s", contract_id, e)
+            return None
+    
+    def set_staleness_threshold(self, minutes: int):
+        """Set the staleness threshold for health monitoring"""
+        if minutes > 0:
+            self.staleness_threshold_minutes = minutes
+            logger.info("Staleness threshold updated to %d minutes", minutes)
+        else:
+            logger.warning("Invalid staleness threshold: %d minutes", minutes)
+    
+    def get_health_summary(self) -> Dict[str, any]:
+        """
+        Get a quick summary of stream health status
+        
+        Returns:
+            Dictionary with health summary statistics
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            total_contracts = len(self.tracked_contracts)
+            active_contracts = len(self.active_streams)
+            
+            # Check data staleness
+            stale_contracts = 0
+            for contract_id, last_data_time in self.last_data_timestamps.items():
+                if last_data_time:
+                    minutes_since_data = (now - last_data_time).total_seconds() / 60
+                    if minutes_since_data > self.staleness_threshold_minutes:
+                        stale_contracts += 1
+            
+            return {
+                "total_contracts": total_contracts,
+                "active_contracts": active_contracts,
+                "stale_contracts": stale_contracts,
+                "healthy_contracts": active_contracts - stale_contracts,
+                "staleness_threshold_minutes": self.staleness_threshold_minutes,
+                "tws_connected": self._is_connected(),
+                "last_updated": now.isoformat()
+            }
+            
+        except Exception as e:
+            logger.error("Error generating health summary: %s", e)
+            return {
+                "error": str(e),
+                "last_updated": datetime.now(timezone.utc).isoformat()
+            }
 
 
 # Global background stream manager instance (initialized in api_server.py)

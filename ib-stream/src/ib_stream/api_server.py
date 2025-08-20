@@ -134,9 +134,17 @@ class IBStreamAPIServer(BaseAPIServer):
                            len(self.stream_config.storage.tracked_contracts))
             
             try:
+                # Get health staleness threshold with fallback
+                staleness_threshold = getattr(
+                    self.stream_config.storage, 
+                    'health_staleness_threshold_minutes', 
+                    15  # Default to 15 minutes
+                )
+                
                 self.background_manager = BackgroundStreamManager(
                     tracked_contracts=self.stream_config.storage.tracked_contracts,
-                    reconnect_delay=self.stream_config.storage.background_stream_reconnect_delay
+                    reconnect_delay=self.stream_config.storage.background_stream_reconnect_delay,
+                    staleness_threshold_minutes=staleness_threshold
                 )
                 await self.background_manager.start()
                 self.logger.info("Background streaming started successfully")
@@ -229,6 +237,9 @@ class IBStreamAPIServer(BaseAPIServer):
                 "/health": "Health check with TWS connection status",
                 "/storage/status": "Storage system status and metrics",
                 "/background/status": "Background streaming status",
+                "/background/health": "Comprehensive background stream health with trading hours",
+                "/background/health/{contract_id}": "Health status for specific contract",
+                "/background/health/summary": "Quick summary of background stream health",
                 "/v2/buffer/{contract_id}/info": "Buffer information for contract",
                 "/v2/buffer/{contract_id}/stats": "Buffer statistics for contract",
                 "/stream/info": "Available tick types and streaming capabilities",

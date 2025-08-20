@@ -94,6 +94,11 @@ class StorageConfig:
     max_tracked_contracts: int = 10
     background_stream_reconnect_delay: int = 3  # seconds
     
+    # Health monitoring configuration
+    health_staleness_threshold_minutes: int = 15  # Minutes before data is considered stale
+    health_check_interval_seconds: int = 300  # How often to perform health checks (5 minutes)
+    trading_hours_cache_ttl_hours: int = 24  # How long to cache trading hours data
+    
     def __post_init__(self):
         """Initialize derived paths"""
         if self.json_storage_path is None:
@@ -195,6 +200,10 @@ def load_storage_config_from_env() -> StorageConfig:
     config.enable_metrics = os.getenv("IB_STREAM_ENABLE_METRICS", "true").lower() == "true"
     config.metrics_window_size = int(os.getenv("IB_STREAM_METRICS_WINDOW", config.metrics_window_size))
     config.health_check_interval_seconds = int(os.getenv("IB_STREAM_HEALTH_INTERVAL", config.health_check_interval_seconds))
+    
+    # Health monitoring
+    config.health_staleness_threshold_minutes = int(os.getenv("IB_STREAM_HEALTH_STALENESS_MINUTES", config.health_staleness_threshold_minutes))
+    config.trading_hours_cache_ttl_hours = int(os.getenv("IB_STREAM_TRADING_HOURS_TTL_HOURS", config.trading_hours_cache_ttl_hours))
     
     # Tracked contracts
     config.max_tracked_contracts = int(os.getenv("IB_STREAM_MAX_TRACKED", config.max_tracked_contracts))

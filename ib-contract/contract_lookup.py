@@ -122,6 +122,32 @@ class ContractLookupApp(IBConnection):
         """Check if all requests are completed"""
         return len(self.finished_requests) >= self.total_requests
 
+    def request_contract_by_id(self, contract_id: int):
+        """
+        Request contract details using only contract ID
+        
+        This method leverages IB Gateway's ability to resolve contract details
+        from just the contract ID, enabling reverse lookups.
+        """
+        logger.info(f"Requesting contract details for contract ID {contract_id}...")
+        
+        # Reset state for new lookup
+        self.contracts = []
+        self.finished_requests = set()
+        self.total_requests = 1
+        self.ticker = f"ID:{contract_id}"  # For logging/identification
+        self.requested_types = ["ID_LOOKUP"]
+        
+        # Create minimal contract with only ID set
+        from ibapi.contract import Contract
+        contract = Contract()
+        contract.conId = contract_id
+        
+        # Request contract details - IB Gateway will resolve the full details
+        self.reqContractDetails(self.req_id, contract)
+        logger.debug(f"Sent contract details request for ID {contract_id} with reqId {self.req_id}")
+        self.req_id += 1
+
     def display_contracts(self):
         """Display all found contracts grouped by security type"""
         if not self.contracts:

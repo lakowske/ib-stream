@@ -14,7 +14,141 @@ from typing import Any, Dict, Optional, Union
 logger = logging.getLogger(__name__)
 
 
-class CacheManager:
+class CacheException(Exception):
+    """Base exception for cache operations"""
+    pass
+
+
+class CacheFileError(CacheException):
+    """Exception for cache file operations"""
+    pass
+
+
+class CacheValidationError(CacheException):
+    """Exception for cache validation failures"""
+    pass
+
+
+class CacheFilenameGenerator:
+    """Utility class for generating consistent cache filenames"""
+    
+    @staticmethod
+    def get_date_prefix() -> str:
+        """Generate consistent date prefix for cache files"""
+        return datetime.now().strftime("%Y%m%d")
+    
+    @staticmethod 
+    def generate_symbol_cache_filename(prefix: str, cache_key: str) -> str:
+        """Generate filename for symbol-based cache"""
+        date_prefix = CacheFilenameGenerator.get_date_prefix()
+        return f"{date_prefix}-{cache_key}.json"
+    
+    @staticmethod
+    def generate_contract_cache_filename(contract_id: int) -> str:
+        """Generate filename for contract ID-based cache"""
+        date_prefix = CacheFilenameGenerator.get_date_prefix()
+        return f"{date_prefix}-contract_{contract_id}.json"
+    
+    @staticmethod
+    def get_file_patterns(prefix: Optional[str] = None) -> list[str]:
+        """Get file patterns for cache file discovery"""
+        patterns = []
+        if prefix:
+            patterns.extend([
+                f"*-{prefix}_*.json",  # Date-prefixed symbol files
+                f"{prefix}_*.json"     # Non-prefixed symbol files  
+            ])
+        patterns.append("*-contract_*.json")  # Contract ID files
+        return patterns
+
+
+class ContractCacheMixin:
+    """Mixin class for contract-specific cache operations"""
+    
+    def get_contract(self, contract_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get contract data by ID from contract-specific cache
+        
+        Args:
+            contract_id: Contract ID to lookup
+            
+        Returns:
+            Contract data if valid, None otherwise
+            
+        Raises:
+            CacheFileError: If cache file operation fails
+        """
+        try:
+            cache_filename = self._get_contract_cache_filename(contract_id)
+            
+            # Check file cache for contract ID
+            if self._is_cache_valid(cache_filename):
+                cache_path = self.cache_dir / cache_filename
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    logger.info("Cache operation completed", extra={
+                        "operation": "get_contract",
+                        "contract_id": contract_id,
+                        "cache_hit": True,
+                        "cache_type": "file"
+                    })
+                    return data
+                except (OSError, json.JSONDecodeError) as e:
+                    logger.warning("Failed to load contract cache file %s: %s", cache_filename, e)
+                    # Remove corrupted cache file
+                    cache_path.unlink(missing_ok=True)
+                    raise CacheFileError(f"Failed to load contract cache for ID {contract_id}") from e
+            
+            logger.debug("Contract cache miss for ID %d", contract_id)
+            return None
+            
+        except Exception as e:
+            if isinstance(e, CacheFileError):
+                raise
+            raise CacheFileError(f"Contract cache operation failed for ID {contract_id}") from e
+    
+    def set_contract(self, contract_id: int, contract_data: Dict[str, Any], 
+                    source_cache: Optional[str] = None) -> bool:
+        """
+        Store contract data in ID-specific cache
+        
+        Args:
+            contract_id: Contract ID
+            contract_data: Contract details
+            source_cache: Optional reference to symbol-based cache file
+            
+        Returns:
+            True if successfully cached, False otherwise
+            
+        Raises:
+            CacheFileError: If cache file operation fails
+        """
+        try:
+            cache_filename = self._get_contract_cache_filename(contract_id)
+            
+            # Create contract cache structure
+            cache_data = {
+                "contract_id": contract_id,
+                "contract_data": contract_data,
+                "cached_at": datetime.now().isoformat(),
+                "source_cache": source_cache,
+                "cache_type": "contract_id"
+            }
+            
+            # Store in file cache
+            cache_path = self.cache_dir / cache_filename
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f, indent=2, ensure_ascii=False)
+            logger.debug("Cached contract data for ID %d to %s", contract_id, cache_filename)
+            return True
+            
+        except (OSError, TypeError) as e:
+            logger.error("Failed to write contract cache file for ID %d: %s", contract_id, e)
+            raise CacheFileError(f"Failed to cache contract ID {contract_id}") from e
+
+
+class CacheManager(ContractCacheMixin):
     """
     Generic cache manager with memory and file-based storage
     
@@ -65,8 +199,11 @@ class CacheManager:
     
     def _get_cache_filename(self, cache_key: str) -> str:
         """Generate cache filename with timestamp"""
-        today = datetime.now().strftime("%Y%m%d")
-        return f"{today}-{cache_key}.json"
+        return CacheFilenameGenerator.generate_symbol_cache_filename(self.prefix, cache_key)
+    
+    def _get_contract_cache_filename(self, contract_id: int) -> str:
+        """Generate contract ID-based cache filename"""
+        return CacheFilenameGenerator.generate_contract_cache_filename(contract_id)
     
     def _is_cache_valid(self, cache_filename: str) -> bool:
         """Check if cache file is still valid"""
@@ -249,19 +386,22 @@ class CacheManager:
         
         # File cache info
         if self.cache_dir.exists():
-            pattern = f"{self.prefix}_*.json" if self.prefix else "*.json"
-            for cache_file in self.cache_dir.glob(pattern):
-                try:
-                    file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
-                    age = datetime.now() - file_time
-                    file_info[cache_file.name] = {
-                        "cached_at": file_time.isoformat(),
-                        "age_seconds": int(age.total_seconds()),
-                        "valid": self._is_cache_valid(cache_file.name),
-                        "file_size": cache_file.stat().st_size
-                    }
-                except (OSError, OverflowError) as e:
-                    logger.warning("Error getting file info for %s: %s", cache_file, e)
+            # Use filename generator for consistent patterns
+            patterns = CacheFilenameGenerator.get_file_patterns(self.prefix)
+            
+            for pattern in patterns:
+                for cache_file in self.cache_dir.glob(pattern):
+                    try:
+                        file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+                        age = datetime.now() - file_time
+                        file_info[cache_file.name] = {
+                            "cached_at": file_time.isoformat(),
+                            "age_seconds": int(age.total_seconds()),
+                            "valid": self._is_cache_valid(cache_file.name),
+                            "file_size": cache_file.stat().st_size
+                        }
+                    except (OSError, OverflowError) as e:
+                        logger.warning("Error getting file info for %s: %s", cache_file, e)
         
         return {
             "cache_directory": str(self.cache_dir),

@@ -123,9 +123,17 @@ async def lifespan(_):
                    len(config.storage.tracked_contracts))
         
         try:
+            # Get health staleness threshold with fallback
+            staleness_threshold = getattr(
+                config.storage, 
+                'health_staleness_threshold_minutes', 
+                15  # Default to 15 minutes
+            )
+            
             background_manager = BackgroundStreamManager(
                 tracked_contracts=config.storage.tracked_contracts,
-                reconnect_delay=config.storage.background_stream_reconnect_delay
+                reconnect_delay=config.storage.background_stream_reconnect_delay,
+                staleness_threshold_minutes=staleness_threshold
             )
             await background_manager.start()
             logger.info("Background streaming started successfully")

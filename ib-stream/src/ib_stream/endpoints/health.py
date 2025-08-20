@@ -193,6 +193,148 @@ def setup_health_endpoints(app, config):
                 }
             )
     
+    @router.get("/background/health")
+    async def background_streaming_health():
+        """Comprehensive health assessment for background streams with trading hours awareness"""
+        from ..app_lifecycle import get_app_state
+        
+        app_state = get_app_state()
+        background_manager = app_state['background_manager']
+        
+        if not background_manager:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "enabled": False,
+                    "message": "Background streaming is disabled",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        
+        try:
+            health = await background_manager.get_comprehensive_health()
+            return {
+                "enabled": True,
+                "timestamp": datetime.now().isoformat(),
+                **health.to_dict()
+            }
+        except Exception as e:
+            logger.error("Error getting background stream health: %s", e)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "enabled": True,
+                    "error": f"Health assessment error: {str(e)}",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+    
+    @router.get("/background/health/summary")
+    async def background_health_summary():
+        """Quick summary of background stream health status"""
+        from ..app_lifecycle import get_app_state
+        
+        app_state = get_app_state()
+        background_manager = app_state['background_manager']
+        
+        if not background_manager:
+            return {
+                "enabled": False,
+                "message": "Background streaming is disabled",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        try:
+            summary = background_manager.get_health_summary()
+            return {
+                "enabled": True,
+                "timestamp": datetime.now().isoformat(),
+                **summary
+            }
+        except Exception as e:
+            logger.error("Error getting background stream health summary: %s", e)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "enabled": True,
+                    "error": f"Health summary error: {str(e)}",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+    
+    @router.get("/background/health/{contract_id}")
+    async def contract_health(contract_id: int):
+        """Health status for a specific background stream contract"""
+        from ..app_lifecycle import get_app_state
+        
+        app_state = get_app_state()
+        background_manager = app_state['background_manager']
+        
+        if not background_manager:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "enabled": False,
+                    "message": "Background streaming is disabled",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        
+        try:
+            # Validate contract ID
+            if contract_id <= 0:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Invalid contract ID",
+                        "contract_id": contract_id,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+            
+            # Check if contract is tracked
+            if not background_manager.is_contract_tracked(contract_id):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "Contract not tracked",
+                        "contract_id": contract_id,
+                        "tracked_contracts": list(background_manager.get_tracked_contract_ids()),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+            
+            # Get contract health
+            contract_health = await background_manager.get_contract_health(contract_id)
+            
+            if contract_health:
+                return {
+                    "enabled": True,
+                    "contract_id": contract_id,
+                    "timestamp": datetime.now().isoformat(),
+                    **contract_health.to_dict()
+                }
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": "Could not assess contract health",
+                        "contract_id": contract_id,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                
+        except Exception as e:
+            logger.error("Error getting contract health for %d: %s", contract_id, e)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": f"Contract health assessment error: {str(e)}",
+                    "contract_id": contract_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+    
     @router.get("/time/status")
     async def time_status():
         """Check system time drift and synchronization status using ib-util time monitoring"""

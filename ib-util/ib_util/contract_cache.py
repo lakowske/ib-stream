@@ -25,7 +25,6 @@ class ContractCacheEntry:
     def contract_id(self) -> int:
         return self.contract_data.get("con_id", 0)
     
-    @property
     def is_expired(self, ttl_hours: int = 24) -> bool:
         """Check if cache entry is expired"""
         return datetime.now() - self.cached_at > timedelta(hours=ttl_hours)

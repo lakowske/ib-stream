@@ -103,6 +103,65 @@ class ContractAPIServer(BaseAPIServer):
                     detail=f"Internal server error: {str(e)}"
                 ) from e
         
+        @self.app.get("/contracts/{contract_id}")
+        async def get_contract(contract_id: int):
+            """Get contract details by contract ID"""
+            try:
+                # Validate contract ID first
+                from ib_util import validate_contract_id, ValidationError
+                
+                try:
+                    contract_id = validate_contract_id(contract_id)
+                except ValidationError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                
+                # Try contract ID-specific cache first (fast path)
+                cached_contract = self.cache.get_contract(contract_id)
+                if cached_contract:
+                    self.logger.debug(f"Contract cache hit for ID {contract_id}")
+                    contract_data = cached_contract["contract_data"]
+                else:
+                    # Find contract using reliable cache search (symbol-based cache)
+                    contract_data = await self._find_contract_by_id_fast(contract_id)
+                    if not contract_data:
+                        # Try slow path as backup
+                        contract_data = self._find_contract_by_id_slow(contract_id)
+                    
+                    # If found in symbol-based cache, create ID-specific cache entry for faster future access
+                    if contract_data:
+                        try:
+                            self.cache.set_contract(contract_id, contract_data, "symbol_cache")
+                            self.logger.debug(f"Created ID-specific cache entry for contract {contract_id}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to create ID-specific cache for contract {contract_id}: {e}")
+                    
+                    if not contract_data:
+                        # Contract not in cache - try to fetch from IB Gateway by ID
+                        self.logger.info(f"Contract {contract_id} not in cache, attempting IB Gateway lookup...")
+                        contract_data = await self._lookup_contract_by_id_from_ib(contract_id)
+                        
+                        if not contract_data:
+                            raise HTTPException(
+                                status_code=404,
+                                detail=f"Contract ID {contract_id} not found in cache or IB Gateway. Contract may not exist or IB Gateway may be unavailable."
+                            )
+                
+                return {
+                    "status": "success",
+                    "timestamp": self._get_current_timestamp(),
+                    "contract_id": contract_id,
+                    **contract_data
+                }
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                self.logger.error("Error getting contract details for ID %d: %s", contract_id, e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get contract details: {str(e)}"
+                ) from e
+        
         @self.app.get("/cache/status")
         async def cache_status():
             """Get cache status"""
@@ -326,6 +385,7 @@ class ContractAPIServer(BaseAPIServer):
             "endpoints": {
                 "/lookup/{ticker}": "Get all contracts for a ticker",
                 "/lookup/{ticker}/{sec_type}": "Get contracts for a ticker and security type",
+                "/contracts/{contract_id}": "Get contract details by contract ID",
                 "/market-status/{contract_id}": "Check if market is currently open for contract",
                 "/trading-hours/{contract_id}": "Get detailed trading hours information",
                 "/trading-schedule/{contract_id}": "Get upcoming trading schedule",
@@ -481,6 +541,97 @@ class ContractAPIServer(BaseAPIServer):
             self.logger.warning("Failed to cache data for %s", "/".join(cache_key_parts))
         
         return data
+    
+    async def _lookup_contract_by_id_from_ib(self, contract_id: int) -> Optional[Dict]:
+        """
+        Lookup contract details from IB Gateway using only contract ID
+        
+        Args:
+            contract_id: IB contract ID to lookup
+            
+        Returns:
+            Contract data dictionary if found, None if not found or error
+        """
+        try:
+            # Get TWS connection
+            app_instance = self._ensure_tws_connection()
+            
+            # Reset app state for new request
+            app_instance.contracts = []
+            app_instance.finished_requests = set()
+            app_instance.total_requests = 0
+            app_instance.ticker = None
+            app_instance.requested_types = []
+            app_instance.json_output = True
+            
+            # Request contract by ID
+            app_instance.request_contract_by_id(contract_id)
+            
+            # Wait for data with timeout
+            timeout = 15  # Shorter timeout for ID lookup
+            start_time = time.time()
+            
+            while not app_instance.is_finished() and (time.time() - start_time) < timeout:
+                await asyncio.sleep(0.1)
+            
+            if not app_instance.is_finished():
+                self.logger.warning(f"Timeout waiting for contract ID {contract_id} from IB Gateway")
+                return None
+            
+            if not app_instance.contracts:
+                self.logger.info(f"No contract found for ID {contract_id}")
+                return None
+            
+            # Should only have one contract for ID lookup
+            contract_data = app_instance.contracts[0]
+            
+            # Cache using dual storage pattern
+            symbol = contract_data.get("symbol", "UNKNOWN")
+            sec_type = contract_data.get("sec_type", "UNKNOWN")
+            
+            # 1. Create and cache symbol-based cache (for /lookup endpoints)
+            cache_key_parts = [symbol, sec_type]
+            symbol_cache_data = {
+                "ticker": symbol,
+                "timestamp": self._get_current_timestamp(),
+                "security_types_searched": [sec_type],
+                "total_contracts": 1,
+                "contracts_by_type": {
+                    sec_type: {
+                        "count": 1,
+                        "contracts": [contract_data]
+                    }
+                },
+                "summary": {sec_type: 1},
+                "cached": False,
+                "source": "id_lookup"
+            }
+            
+            # Cache symbol-based data
+            symbol_cache_filename = None
+            if self.cache.set(symbol_cache_data, *cache_key_parts):
+                cache_key = "_".join(cache_key_parts)
+                symbol_cache_filename = f"{self.cache.prefix}_{cache_key}.json" if self.cache.prefix else f"{cache_key}.json"
+                self.logger.info(f"Cached contract {contract_id} ({symbol} {sec_type}) in symbol cache")
+                
+                # Update contract index
+                try:
+                    self.contract_index.add_contract(contract_data, cache_key)
+                    self.logger.debug(f"Added contract {contract_id} to index from ID lookup")
+                except Exception as e:
+                    self.logger.warning(f"Failed to update contract index after ID lookup: {e}")
+            
+            # 2. Cache in contract ID-specific cache (for /contracts/{id} endpoints)
+            if self.cache.set_contract(contract_id, contract_data, symbol_cache_filename):
+                self.logger.info(f"Cached contract {contract_id} in ID-specific cache")
+            else:
+                self.logger.warning(f"Failed to cache contract {contract_id} in ID-specific cache")
+            
+            return contract_data
+            
+        except Exception as e:
+            self.logger.error(f"Error looking up contract ID {contract_id} from IB Gateway: {e}")
+            return None
     
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format"""

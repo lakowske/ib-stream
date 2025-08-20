@@ -340,6 +340,183 @@ def restart(service):
 
 
 @services.command()
+@click.argument('service', type=click.Choice(['ib-contract', 'ib-stream', 'contract', 'stream']))
+def restart_service(service):
+    """Restart a specific service (ib-contract or ib-stream)"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    # Map friendly names to actual service names
+    service_mapping = {
+        'ib-contract': 'ib-contract-production',
+        'contract': 'ib-contract-production', 
+        'ib-stream': 'ib-stream-production',
+        'stream': 'ib-stream-production'
+    }
+    
+    actual_service = service_mapping.get(service, service)
+    
+    import subprocess
+    echo(style(f"Restarting {actual_service}...", fg='yellow'))
+    result = subprocess.run(cmd + ['restart', actual_service], capture_output=True, text=True, env=env)
+    
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+    
+    # Show status after restart
+    echo(style(f"\nService status after restart:", fg='cyan'))
+    status_result = subprocess.run(cmd + ['status', actual_service], capture_output=True, text=True, env=env)
+    if status_result.stdout:
+        echo(status_result.stdout)
+
+
+@services.command()
+@click.argument('service', type=click.Choice(['ib-contract', 'ib-stream', 'contract', 'stream']))
+def stop_service(service):
+    """Stop a specific service (ib-contract or ib-stream)"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    # Map friendly names to actual service names
+    service_mapping = {
+        'ib-contract': 'ib-contract-production',
+        'contract': 'ib-contract-production',
+        'ib-stream': 'ib-stream-production', 
+        'stream': 'ib-stream-production'
+    }
+    
+    actual_service = service_mapping.get(service, service)
+    
+    import subprocess
+    echo(style(f"Stopping {actual_service}...", fg='yellow'))
+    result = subprocess.run(cmd + ['stop', actual_service], capture_output=True, text=True, env=env)
+    
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+
+
+@services.command()
+@click.argument('service', type=click.Choice(['ib-contract', 'ib-stream', 'contract', 'stream']))
+def start_service(service):
+    """Start a specific service (ib-contract or ib-stream)"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    # Map friendly names to actual service names
+    service_mapping = {
+        'ib-contract': 'ib-contract-production',
+        'contract': 'ib-contract-production',
+        'ib-stream': 'ib-stream-production',
+        'stream': 'ib-stream-production'
+    }
+    
+    actual_service = service_mapping.get(service, service)
+    
+    import subprocess
+    echo(style(f"Starting {actual_service}...", fg='yellow'))
+    result = subprocess.run(cmd + ['start', actual_service], capture_output=True, text=True, env=env)
+    
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+    
+    # Show status after start
+    echo(style(f"\nService status after start:", fg='cyan'))
+    status_result = subprocess.run(cmd + ['status', actual_service], capture_output=True, text=True, env=env)
+    if status_result.stdout:
+        echo(status_result.stdout)
+
+
+@services.command()
+@click.argument('service', type=click.Choice(['ib-contract', 'contract']))
+@click.option('--test-contract-id', default=711280073, help='Contract ID to test after restart')
+def test_restart(service, test_contract_id):
+    """Restart ib-contract service and run health tests"""
+    ensure_venv()
+    cmd, env = get_supervisorctl()
+    
+    # Map friendly names to actual service names
+    service_mapping = {
+        'ib-contract': 'ib-contract-production',
+        'contract': 'ib-contract-production'
+    }
+    
+    actual_service = service_mapping.get(service, service)
+    
+    import subprocess
+    import time
+    
+    # Step 1: Restart the service
+    echo(style(f"🔄 Restarting {actual_service}...", fg='yellow'))
+    result = subprocess.run(cmd + ['restart', actual_service], capture_output=True, text=True, env=env)
+    
+    if result.stdout:
+        echo(result.stdout)
+    if result.stderr:
+        echo(style(result.stderr, fg='yellow'))
+    
+    # Step 2: Wait for service to fully start
+    echo(style("⏳ Waiting for service to start...", fg='yellow'))
+    time.sleep(5)
+    
+    # Step 3: Check service status
+    echo(style(f"📊 Service status:", fg='cyan'))
+    status_result = subprocess.run(cmd + ['status', actual_service], capture_output=True, text=True, env=env)
+    if status_result.stdout:
+        echo(status_result.stdout)
+    
+    # Step 4: Test service health
+    echo(style("🏥 Testing service health...", fg='cyan'))
+    import subprocess
+    try:
+        # Test basic health endpoint
+        health_result = subprocess.run(['curl', '-s', 'http://localhost:8861/health'], 
+                                     capture_output=True, text=True, timeout=10)
+        if health_result.returncode == 0:
+            echo(style("✅ Health endpoint responding", fg='green'))
+            
+            # Test contract lookup if service is healthy
+            echo(style(f"🔍 Testing contract lookup (ID: {test_contract_id})...", fg='cyan'))
+            contract_result = subprocess.run(['curl', '-s', f'http://localhost:8861/contracts/{test_contract_id}'], 
+                                           capture_output=True, text=True, timeout=15)
+            if contract_result.returncode == 0 and '"status":"success"' in contract_result.stdout:
+                echo(style("✅ Contract lookup working", fg='green'))
+                
+                # Test cache status
+                echo(style("💾 Testing cache status...", fg='cyan'))
+                cache_result = subprocess.run(['curl', '-s', 'http://localhost:8861/cache/status'], 
+                                            capture_output=True, text=True, timeout=10)
+                if cache_result.returncode == 0:
+                    echo(style("✅ Cache status working", fg='green'))
+                    
+                    # Parse and show cache info
+                    try:
+                        import json
+                        cache_data = json.loads(cache_result.stdout)
+                        echo(f"📈 Cache info: {cache_data.get('total_memory_entries', 0)} memory, {cache_data.get('total_file_entries', 0)} file entries")
+                    except:
+                        pass
+                else:
+                    echo(style("❌ Cache status failed", fg='red'))
+            else:
+                echo(style(f"❌ Contract lookup failed for ID {test_contract_id}", fg='red'))
+        else:
+            echo(style("❌ Health endpoint not responding", fg='red'))
+            
+    except subprocess.TimeoutExpired:
+        echo(style("❌ Service tests timed out", fg='red'))
+    except Exception as e:
+        echo(style(f"❌ Service test error: {e}", fg='red'))
+    
+    echo(style("🎯 Test restart complete", fg='cyan'))
+
+
+@services.command()
 @click.option('--service', help='Show logs for specific service')
 @click.option('--follow', '-f', is_flag=True, help='Follow logs in real time')
 def logs(service, follow):

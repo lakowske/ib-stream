@@ -42,15 +42,24 @@ class ContractClient:
         try:
             session = await self._get_session()
             
-            # For known contracts, we can try direct lookup
-            # For contract 711280073 (MNQ), lookup MNQ contracts
-            if contract_id == 711280073:
-                return await self._lookup_contract_by_symbol("MNQ", contract_id)
+            # Use the new direct contract lookup endpoint
+            url = f"{self.base_url}/contracts/{contract_id}"
             
-            # For unknown contracts, we'd need a different approach
-            # TODO: Add reverse lookup endpoint to ib-contract service if needed
-            logger.error("Contract ID %d lookup not implemented - add to known contracts", contract_id)
-            return None
+            async with session.get(url) as response:
+                if response.status == 404:
+                    logger.warning("Contract ID %d not found in ib-contract service cache", contract_id)
+                    return None
+                elif response.status != 200:
+                    logger.error("Failed to get contract %d: HTTP %d", contract_id, response.status)
+                    return None
+                
+                data = await response.json()
+                
+                if data.get("status") != "success":
+                    logger.error("Unexpected response format for contract %d", contract_id)
+                    return None
+                
+                return self._create_contract_from_data(data)
                 
         except asyncio.TimeoutError:
             logger.error("Timeout requesting contract %d from ib-contract service", contract_id)

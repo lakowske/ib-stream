@@ -34,7 +34,7 @@ from .response_formatting import (
     format_cache_status_response, format_sse_event, format_price, format_size, format_percentage
 )
 from .base_api_server import BaseAPIServer, create_standardized_health_response, create_standardized_error_response
-from .cache_manager import CacheManager
+from .cache_manager import CacheManager, CacheException, CacheFileError, CacheValidationError, CacheFilenameGenerator
 
 __all__ = [
     'IBConnection', 
