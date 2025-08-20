@@ -60,9 +60,27 @@ source .venv/bin/activate && source .venv/bin/activate && python ib.py services 
 source .venv/bin/activate && source .venv/bin/activate && python ib.py services logs                # View service logs
 source .venv/bin/activate && source .venv/bin/activate && python ib.py services stop                # Stop all services
 
+# Selective Service Management (New)
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services restart-service contract      # Restart only ib-contract service
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services restart-service ib-stream     # Restart only ib-stream service
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services stop-service contract         # Stop only ib-contract service
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services start-service ib-contract     # Start only ib-contract service
+source .venv/bin/activate && source .venv/bin/activate && python ib.py services test-restart contract --test-contract-id 711280073  # Restart ib-contract with health tests
+
 # Testing & Validation
 source .venv/bin/activate && source .venv/bin/activate && python ib.py test connection              # Test IB Gateway connection
 source .venv/bin/activate && source .venv/bin/activate && python ib.py test contract AAPL           # Test contract lookup
+
+# Background Stream Health Monitoring (New)
+curl -s http://localhost:8851/background/health/summary | jq .                    # Overall background stream health summary
+curl -s http://localhost:8851/background/health/711280073 | jq .                 # Health for specific contract (MNQ)  
+curl -s http://localhost:8851/background/health/detailed | jq .                  # Detailed health for all tracked contracts
+
+# ib-contract Advanced Endpoints (New)
+curl -s http://localhost:8861/contracts/711280073 | jq .                         # Direct contract ID lookup (fast)
+curl -s http://localhost:8861/market-status/711280073 | jq .                     # Check if market is open for contract
+curl -s http://localhost:8861/trading-hours/711280073 | jq .                     # Get detailed trading hours
+curl -s http://localhost:8861/cache/status | jq .                                # Cache performance and statistics
 
 # Development Tools
 source .venv/bin/activate && source .venv/bin/activate && python ib.py dev setup                    # Setup development environment
@@ -92,6 +110,42 @@ The project uses a modern type-safe configuration system with automatic fallback
 - `ib-stream/config/development.env` - Development environment settings  
 - `ib-stream/config/instance.env` - Auto-generated instance-specific values
 - `ib-stream/config/production-server.env` - Production server specific settings
+
+## Background Stream Health Monitoring
+
+The system now includes comprehensive health monitoring for background streams with trading hours awareness.
+
+### Health Monitoring Features
+- **Trading Hours Integration**: Automatically detects market status (OPEN, CLOSED, PRE_MARKET, AFTER_HOURS)
+- **Data Staleness Detection**: Configurable threshold (default: 15 minutes) for detecting stale data
+- **Contract-Specific Health**: Individual health assessment for each tracked contract
+- **Market-Aware Status**: Different health expectations during market hours vs off-hours
+
+### Health Status Classifications
+- **HEALTHY**: Stream active and receiving data within expected timeframe during market hours
+- **DEGRADED**: Stream active but data is getting stale during market hours  
+- **UNHEALTHY**: Stream not receiving expected data during market hours
+- **OFF_HOURS**: Market closed, no data expected (normal state)
+- **UNKNOWN**: Unable to determine market status or data state
+
+### Health Monitoring Endpoints
+- **Summary Health**: `/background/health/summary` - Overall status for all background streams
+- **Contract Health**: `/background/health/{contract_id}` - Detailed health for specific contract
+- **Detailed Health**: `/background/health/detailed` - Comprehensive health data for all contracts
+
+### Example Usage
+```bash
+# Check overall background stream health
+curl -s http://localhost:8851/background/health/summary | jq .
+
+# Check health for MNQ contract specifically  
+curl -s http://localhost:8851/background/health/711280073 | jq .
+
+# Get detailed health information for all tracked contracts
+curl -s http://localhost:8851/background/health/detailed | jq .
+```
+
+The system tracks contract 711280073 (MNQ) by default and can monitor multiple contracts simultaneously.
 
 ## Service Management
 
@@ -379,9 +433,39 @@ source .venv/bin/activate && python ib.py services logs --service ib-stream-remo
 | `make contract-lookup-v2` | `source .venv/bin/activate && python ib.py test contract SYMBOL` | Test contract lookup |
 | `make config-watch` | `source .venv/bin/activate && python ib.py config watch` | Configuration hot-reload |
 
+### New CLI Commands (Latest)
+
+| Command | Purpose |
+|---------|---------|
+| `python ib.py services restart-service [contract\|ib-stream]` | Restart specific service only |
+| `python ib.py services stop-service [contract\|ib-stream]` | Stop specific service only |
+| `python ib.py services start-service [contract\|ib-stream]` | Start specific service only |
+| `python ib.py services test-restart contract --test-contract-id ID` | Restart ib-contract with health tests |
+
 The CLI provides better error handling, help systems, and extensibility compared to the legacy Makefile approach.
 
-## Recent Critical Fixes (v2.0)
+## Recent Critical Fixes and New Features (v2.1)
+
+### 🏥 Background Stream Health Monitoring ✅ NEW FEATURE
+- **Added comprehensive health monitoring**: Trading hours awareness with market status detection
+  - **New Endpoints**: `/background/health/summary`, `/background/health/{contract_id}`, `/background/health/detailed`
+  - **Health Classifications**: HEALTHY, DEGRADED, UNHEALTHY, OFF_HOURS, UNKNOWN
+  - **Features**: 15-minute data staleness detection, contract-specific health assessment
+  - **Result**: Full visibility into background stream health with market-aware expectations
+
+### 🔄 Dual Storage Pattern for Contract Caching ✅ NEW FEATURE  
+- **Implemented dual storage architecture**: Support both symbol-based and contract ID lookups
+  - **Symbol Cache**: `YYYYMMDD-contracts_SYMBOL_TYPE.json` for traditional lookups
+  - **Contract ID Cache**: `YYYYMMDD-contract_{ID}.json` for direct ID-based access  
+  - **Performance**: Sub-20ms response times for cached contract ID lookups
+  - **Result**: Fast contract resolution without requiring prior symbol knowledge
+
+### 🛠️ Selective Service Management ✅ NEW FEATURE
+- **Added granular service control**: Restart individual services without affecting others
+  - **New Commands**: `restart-service`, `stop-service`, `start-service`, `test-restart`
+  - **Service Isolation**: ib-contract can be restarted independently of ib-stream
+  - **Health Testing**: Integrated health validation after service operations
+  - **Result**: Safe production service management with zero downtime for unaffected services
 
 ### Storage System Issues ✅ RESOLVED
 - **Fixed MultiStorageV3 initialization error**: `unsupported operand type(s) for /: 'str' and 'str'`
