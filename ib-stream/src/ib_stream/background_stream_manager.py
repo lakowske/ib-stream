@@ -47,12 +47,14 @@ class BackgroundStreamManager:
         
         # Data staleness monitoring
         self.last_data_timestamps: Dict[int, datetime] = {}  # contract_id -> last_data_time
-        self.data_staleness_threshold = timedelta(minutes=5)  # Alert if no data for 5+ minutes
+        self.data_staleness_threshold = timedelta(minutes=3)  # Alert if no data for 3+ minutes
         
         # Health monitoring
         self.health_service = StreamHealthService()
         self.staleness_threshold_minutes = staleness_threshold_minutes
         self.last_health_check: Dict[int, datetime] = {}  # contract_id -> last_health_check
+        self._stream_start_time: Dict[int, datetime] = {}  # contract_id -> when streams started
+        self._connection_failure_count = 0  # Track consecutive connection failures
         
         # Enhanced connection monitoring
         self.last_connection_check = datetime.now(timezone.utc)
@@ -92,7 +94,7 @@ class BackgroundStreamManager:
         self.monitor_task.add_done_callback(self._task_exception_handler)
         logger.info("Started stream monitoring task with exception monitoring")
         
-        logger.info("Background streaming started with comprehensive error handling")
+        logger.info("Background streaming started")
     
     async def stop(self) -> None:
         """Stop all background streaming"""
@@ -184,21 +186,44 @@ class BackgroundStreamManager:
                 await asyncio.sleep(self.connection_check_interval)
                 
             except asyncio.CancelledError:
-                logger.info("🛑 Connection management loop cancelled")
+                logger.info("Connection management loop cancelled")
                 break
             except Exception as e:
-                logger.error("💥 Critical error in connection management: %s", e, exc_info=True)
+                logger.error("Critical error in connection management: %s", e, exc_info=True)
                 # Don't let exceptions break the connection management loop
                 await asyncio.sleep(self.connection_check_interval)
     
     async def _monitor_streams(self) -> None:
         """Monitor stream health and restart if needed"""
+        cycle_count = 0
+        logger.info("Starting enhanced monitoring loop - checking every 30 seconds")
+        
         while self.running:
             try:
-                await asyncio.sleep(60)  # Check every minute
+                cycle_count += 1
+                logger.debug("Monitor cycle #%d starting", cycle_count)
                 
-                if not self._is_connected():
-                    continue
+                await asyncio.sleep(60)  # Check every minute for active market monitoring
+                
+                # Always check data staleness regardless of connection status
+                # This is critical because IB can stop data feed while keeping API connection open
+                
+                # Get current connection and data flow status
+                socket_connected = self._is_socket_connected()
+                data_flowing = self._is_data_flowing()
+                
+                logger.info("Monitor cycle #%d: socket_connected=%s, data_flowing=%s, tracked_contracts=%d", 
+                           cycle_count, socket_connected, data_flowing, len(self.tracked_contracts))
+                
+                # Debug data timestamps
+                now = datetime.now(timezone.utc)
+                for contract_id, last_data_time in self.last_data_timestamps.items():
+                    if last_data_time:
+                        minutes_ago = (now - last_data_time).total_seconds() / 60
+                        logger.debug("Contract %d last data: %s (%.1f minutes ago)", 
+                                   contract_id, last_data_time.strftime('%H:%M:%S'), minutes_ago)
+                    else:
+                        logger.warning("Contract %d: NO DATA RECEIVED YET", contract_id)
                 
                 # Check if all expected streams are active and data is flowing
                 for contract_id, contract in self.tracked_contracts.items():
@@ -234,10 +259,27 @@ class BackgroundStreamManager:
             except Exception as e:
                 logger.error("Error in stream monitoring: %s", e)
     
+    def _is_socket_connected(self) -> bool:
+        """Check if TWS socket connection is active (but not necessarily feeding data)"""
+        return bool(self.tws_app and self.tws_app.is_connected())
+    
+    def _is_data_flowing(self) -> bool:
+        """Check if we're actually receiving market data (not just connected)"""
+        if not self._is_socket_connected():
+            return False
+            
+        # Check if any contract has received data recently
+        now = datetime.now(timezone.utc)
+        for contract_id, last_data_time in self.last_data_timestamps.items():
+            if last_data_time and (now - last_data_time) < timedelta(minutes=1):
+                return True
+        
+        return False
+    
     def _is_connected(self) -> bool:
         """Check if TWS connection is active and capable of market data"""
         # Basic socket connection check
-        if not (self.tws_app and self.tws_app.is_connected()):
+        if not self._is_socket_connected():
             return False
         
         # Test actual connectivity by attempting a simple request every 10 seconds (more frequent)
@@ -370,10 +412,12 @@ class BackgroundStreamManager:
             
             # Connection is already established and verified by connect_and_start()
             logger.info("Background TWS connection established successfully")
+            self._connection_failure_count = 0  # Reset failure count on successful connection
             
         except Exception as e:
             logger.error("Failed to establish TWS connection for background streaming: %s", e, exc_info=True)
             self.tws_app = None
+            self._connection_failure_count += 1
     
     def _on_connection_lost(self):
         """Callback when connection is lost"""
@@ -407,6 +451,9 @@ class BackgroundStreamManager:
         try:
             logger.info("Starting background streams for contract %d (%s): %s", 
                        contract_id, contract.symbol, contract.tick_types)
+            
+            # Track when we start streams for this contract
+            self._stream_start_time[contract_id] = datetime.now(timezone.utc)
             
             contract_streams = {}
             
@@ -576,29 +623,57 @@ class BackgroundStreamManager:
             logger.error("Failed to restart background task: %s", e)
     
     async def _check_data_staleness(self, contract_id: int, contract: TrackedContract) -> None:
-        """Check if data is stale for a contract and log warnings"""
+        """Check if data is stale for a contract and take escalating recovery actions"""
         now = datetime.now(timezone.utc)
         last_data_time = self.last_data_timestamps.get(contract_id)
         
+        logger.debug("Checking staleness for contract %d (%s): last_data_time=%s", 
+                    contract_id, contract.symbol, last_data_time)
+        
         if last_data_time is None:
-            # No data received yet - this might be expected if streams just started
+            # No data received yet - check if streams have been "active" without data
             if contract_id in self.active_streams:
-                # Only warn if streams have been active for more than staleness threshold
-                logger.debug("No data recorded yet for contract %d (%s)", contract_id, contract.symbol)
+                # Check how long streams have been "active" without data
+                stream_age = getattr(self, '_stream_start_time', {}).get(contract_id)
+                logger.info("Zombie check: contract %d, stream_age=%s, active_streams=%s", 
+                           contract_id, stream_age, self.active_streams.get(contract_id, {}))
+                
+                if stream_age and (now - stream_age) > timedelta(minutes=2):
+                    logger.error("ZOMBIE CONNECTION DETECTED: Contract %d (%s) after %s - streams appear active but no data received",
+                                contract_id, contract.symbol, now - stream_age)
+                    # Restart streams after 3 minutes of no data
+                    await self._restart_contract_streams(contract_id)
+                elif stream_age:
+                    minutes_since_start = (now - stream_age).total_seconds() / 60
+                    logger.info("Contract %d: %.1f minutes since stream start, waiting for data or 3min timeout", 
+                               contract_id, minutes_since_start)
+                else:
+                    logger.warning("Contract %d: No stream start time recorded", contract_id)
+            else:
+                logger.warning("Contract %d: Not in active_streams but should be", contract_id)
             return
             
         time_since_data = now - last_data_time
         
-        # Alert if data is stale beyond threshold
-        if time_since_data > self.data_staleness_threshold:
-            logger.warning("STALE DATA: Contract %d (%s) has not received data for %s (threshold: %s)",
-                          contract_id, contract.symbol, time_since_data, self.data_staleness_threshold)
-            
-            # If data is very stale (30+ minutes), consider restarting streams
-            if time_since_data > timedelta(minutes=30):
-                logger.error("VERY STALE DATA: Restarting streams for contract %d (%s) - no data for %s",
+        # Escalating recovery actions based on staleness severity
+        if time_since_data > timedelta(minutes=10):  # 10 min: Service restart warning  
+            logger.critical("STALE DATA (Level 4): Consider service restart - contract %d (%s) - no data for %s",
                            contract_id, contract.symbol, time_since_data)
-                await self._restart_contract_streams(contract_id)
+            # Note: Automatic service restart not implemented - requires manual intervention
+            
+        elif time_since_data > timedelta(minutes=5):  # 5 min: Force connection reset
+            logger.critical("STALE DATA (Level 3): Force reconnecting TWS for contract %d (%s) - no data for %s",
+                           contract_id, contract.symbol, time_since_data)
+            await self._force_connection_reset("Stale data > 10 minutes")
+            
+        elif time_since_data > timedelta(minutes=3):  # 3 min: Restart individual streams
+            logger.error("STALE DATA (Level 2): Restarting streams for contract %d (%s) - no data for %s",
+                        contract_id, contract.symbol, time_since_data)
+            await self._restart_contract_streams(contract_id)
+            
+        elif time_since_data > timedelta(minutes=1):  # 1 min: First warning
+            logger.warning("STALE DATA (Level 1): Contract %d (%s) - no data for %s (threshold: %s)",
+                          contract_id, contract.symbol, time_since_data, self.data_staleness_threshold)
     
     def update_data_timestamp(self, contract_id: int) -> None:
         """Update the last data timestamp for a contract"""
@@ -794,6 +869,30 @@ class BackgroundStreamManager:
         except Exception as e:
             logger.error("Error getting health for contract %d: %s", contract_id, e)
             return None
+    
+    async def _force_connection_reset(self, reason: str) -> None:
+        """Force complete connection reset when streams are consistently failing"""
+        logger.critical("FORCING CONNECTION RESET: %s", reason)
+        
+        try:
+            # Disconnect and clear everything
+            await self._handle_disconnection()
+            
+            # Wait a bit before reconnecting
+            await asyncio.sleep(5)
+            
+            # Establish new connection
+            await self._establish_connection()
+            
+            if self._is_connected():
+                # Restart all streams
+                await self._start_tracked_streams()
+                logger.info("Connection reset completed successfully")
+            else:
+                logger.error("Connection reset failed - still not connected")
+                
+        except Exception as e:
+            logger.error("Error during force connection reset: %s", e)
     
     def set_staleness_threshold(self, minutes: int):
         """Set the staleness threshold for health monitoring"""

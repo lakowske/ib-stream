@@ -379,6 +379,37 @@ source .venv/bin/activate && python ib.py test connection
 find storage -name "*.pb" -newermt "5 minutes ago" | wc -l
 ```
 
+## Enhanced Auto-Recovery System
+
+The ib-stream service features a sophisticated auto-recovery system that automatically detects and resolves connection and data flow issues without manual intervention. This system is critical for maintaining continuous market data collection during trading hours.
+
+**📋 For complete documentation, see [AUTO_RECOVERY.md](./AUTO_RECOVERY.md)**
+
+### Key Features
+- **Dual-state monitoring**: Socket connection + actual data flow detection
+- **Escalating recovery**: Progressive intervention levels (1min → 3min → 5min → 10min)  
+- **Zombie connection detection**: Identifies "connected but no data" states
+- **Automatic stream restarts**: Self-healing for common issues
+- **Production-optimized timing**: Fast detection and recovery for active markets
+
+### Quick Health Check
+```bash
+# Check overall system health
+curl -s http://localhost:8851/health | jq '{status, tws_connected, background_streaming}'
+
+# Check specific contract health  
+curl -s http://localhost:8851/background/health/711280073 | jq '{status, data_freshness}'
+
+# Monitor auto-recovery logs
+source .venv/bin/activate && python ib.py services logs | grep -E "Monitor cycle|STALE DATA|restart"
+```
+
+### Common Auto-Recovery Scenarios
+1. **TWS Session Conflicts** - Automatically resolves when competing sessions close
+2. **IB Gateway Restarts** - Reconnects and restarts streams within 1-2 minutes  
+3. **Network Interruptions** - Continuous retry until connection restored
+4. **Data Subscription Issues** - Escalating recovery actions
+
 ## Troubleshooting
 
 ### Configuration Issues

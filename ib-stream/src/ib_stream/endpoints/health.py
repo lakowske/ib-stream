@@ -21,29 +21,27 @@ def setup_health_endpoints(app, config):
     
     @router.get("/health")
     async def health_check():
-        """Health check endpoint"""
-        from ..app_lifecycle import get_app_state
+        """Health check endpoint using pure state container"""
+        from ..state_container import get_app_state, update_app_state
         
         try:
+            # Get immutable state snapshot
             app_state = get_app_state()
-            storage = app_state['storage']
-            background_manager = app_state['background_manager']
-            tws_app = app_state['tws_app']
-            active_streams = app_state['active_streams']
-            stream_lock = app_state['stream_lock']
             
-            tws_connected = tws_app is not None and tws_app.is_connected()
+            tws_connected = app_state.is_tws_connected()
             
-            # Clear active streams if connection is lost
-            with stream_lock:
-                if not tws_connected and active_streams:
-                    logger.warning("TWS disconnected - clearing %d orphaned active streams", len(active_streams))
-                    active_streams.clear()
-                active_stream_count = len(active_streams)
+            # Clear active streams if connection is lost (pure state update)
+            if not tws_connected and app_state.get_active_stream_count() > 0:
+                logger.warning("TWS disconnected - clearing %d orphaned active streams", 
+                             app_state.get_active_stream_count())
+                # Pure state transformation: clear all active streams
+                app_state = update_app_state(lambda s: s.with_active_streams({}))
+            
+            active_stream_count = app_state.get_active_stream_count()
 
             storage_status = None
-            if storage:
-                storage_info = await storage.get_storage_info()
+            if app_state.has_storage():
+                storage_info = await app_state.storage.get_storage_info()
                 storage_status = {
                     "enabled": True,
                     "formats": storage_info.get('enabled_formats', []),
@@ -55,7 +53,7 @@ def setup_health_endpoints(app, config):
                 storage_status = {"enabled": False}
 
             # Get fresh config from app state
-            current_config = app_state['config']
+            current_config = app_state.config
             
             # Add time and storage monitoring to health check
             from ib_util.time_monitoring import get_time_health_status
@@ -94,15 +92,15 @@ def setup_health_endpoints(app, config):
                 "storage_streaming": storage_health,
                 "time_sync": time_health['time_sync'],
                 "background_streaming": {
-                    "enabled": background_manager is not None,
-                    "tracked_contracts": len(current_config.storage.tracked_contracts) if background_manager else 0,
-                    "status": "running" if background_manager else "disabled"
+                    "enabled": app_state.has_background_streaming(),
+                    "tracked_contracts": len(current_config.storage.tracked_contracts) if app_state.has_background_streaming() else 0,
+                    "status": "running" if app_state.has_background_streaming() else "disabled"
                 },
                 "features": {
                     "sse_streaming": True,
                     "websocket_streaming": True,
                     "v3_storage": True,
-                    "background_tracking": background_manager is not None
+                    "background_tracking": app_state.has_background_streaming()
                 }
             }
         except Exception as e:
@@ -118,21 +116,20 @@ def setup_health_endpoints(app, config):
 
     @router.get("/storage/status")
     async def storage_status():
-        """Storage system status and metrics"""
-        from ..app_lifecycle import get_app_state
+        """Storage system status and metrics using pure state"""
+        from ..state_container import get_app_state
         
         app_state = get_app_state()
-        storage = app_state['storage']
         
-        if not storage:
+        if not app_state.has_storage():
             return {
                 "enabled": False,
                 "message": "Storage system is disabled"
             }
         
         try:
-            storage_info = storage.get_storage_info()
-            storage_metrics = storage.get_metrics()
+            storage_info = app_state.storage.get_storage_info()
+            storage_metrics = app_state.storage.get_metrics()
             
             return {
                 "enabled": True,

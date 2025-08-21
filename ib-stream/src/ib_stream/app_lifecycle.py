@@ -206,7 +206,7 @@ def get_app_state():
     global config
     if config is None:
         import os
-        logger.info("=== CONFIG DEBUG: Loading config (first time) ===")
+        logger.debug("Loading config (first time)")
         logger.info(f"IB_ENVIRONMENT: {os.getenv('IB_ENVIRONMENT', 'NOT_SET')}")
         logger.info(f"IB_CLIENT_ID: {os.getenv('IB_CLIENT_ID', 'NOT_SET')}")
         logger.info(f"IB_HOST: {os.getenv('IB_HOST', 'NOT_SET')}")
@@ -215,24 +215,24 @@ def get_app_state():
         
         config = create_legacy_compatible_config()
         
-        logger.info(f"=== CONFIG DEBUG: Config created ===")
+        logger.debug("Config created")
         logger.info(f"Config client_id: {config.client_id}")
         logger.info(f"Config host: {config.host}")
         logger.info(f"Config storage enabled: {config.storage.enable_storage}")
         logger.info(f"Config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
         logger.info(f"Config tracked contracts: {len(getattr(config.storage, 'tracked_contracts', []))}")
-        logger.info("=== CONFIG DEBUG: End ===")
+        logger.debug("Config loading complete")
     else:
         # Config already exists - let's force reload it to pick up current env vars
         import os
-        logger.info("=== CONFIG DEBUG: Reloading existing config ===")
+        logger.debug("Reloading existing config")
         logger.info(f"Current IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
         logger.info(f"Current config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
         
         # Force reload
         config = create_legacy_compatible_config()
         logger.info(f"Reloaded config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
-        logger.info("=== CONFIG DEBUG: Reload complete ===")
+        logger.debug("Config reload complete")
     
     return {
         'config': config,
