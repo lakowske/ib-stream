@@ -62,7 +62,7 @@ class IBStreamAPIServer(BaseAPIServer):
         """Streaming service startup logic"""
         # Import here to avoid circular imports
         from .app_lifecycle import lifespan
-        from .storage.multi_storage_v3 import MultiStorageV3
+        from .storage.multi_storage_v4 import MultiStorageV4
         from .stream_manager import stream_manager
         from .background_stream_manager import BackgroundStreamManager
         
@@ -93,7 +93,7 @@ class IBStreamAPIServer(BaseAPIServer):
             
             try:
                 from pathlib import Path
-                self.storage = MultiStorageV3(
+                self.storage = MultiStorageV4(
                     storage_path=Path(self.stream_config.storage.storage_base_path),
                     enable_v2_json=self.stream_config.storage.enable_json,
                     enable_v2_protobuf=self.stream_config.storage.enable_protobuf,
@@ -102,7 +102,11 @@ class IBStreamAPIServer(BaseAPIServer):
                     enable_metrics=self.stream_config.storage.enable_metrics
                 )
                 await self.storage.start()
-                self.logger.info("Storage system initialized successfully")
+                self.logger.info("Storage system initialized successfully (MultiStorageV4 - Categorical Architecture)")
+                
+                # Update global state with categorical storage
+                from .state_container import update_global_storage
+                update_global_storage(self.storage)
                 
                 # Initialize stream_manager with storage
                 stream_manager.storage = self.storage
