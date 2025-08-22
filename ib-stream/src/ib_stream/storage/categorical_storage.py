@@ -573,7 +573,7 @@ class CategoricalStorageOrchestrator:
         if store_tasks:
             logger.debug(f"Executing {len(store_tasks)} storage tasks in parallel")
             await asyncio.gather(*store_tasks, return_exceptions=True)
-            logger.info(f"Completed storage to all {len(store_tasks)} backends")
+            logger.debug(f"Completed storage to all {len(store_tasks)} backends")
     
     async def query_messages(self, query: StorageQuery, 
                            preferred_backend: Optional[str] = None) -> AsyncIterator[StorageMessage]:

@@ -56,6 +56,11 @@ class BackgroundStreamManager:
         self._stream_start_time: Dict[int, datetime] = {}  # contract_id -> when streams started
         self._connection_failure_count = 0  # Track consecutive connection failures
         
+        # State change tracking for intelligent logging
+        self._last_socket_connected: Optional[bool] = None
+        self._last_data_flowing: Optional[bool] = None
+        self._last_heartbeat_cycle = 0
+        
         # Enhanced connection monitoring
         self.last_connection_check = datetime.now(timezone.utc)
         self.market_data_farm_status: Dict[str, bool] = {}  # farm_name -> is_connected
@@ -196,7 +201,7 @@ class BackgroundStreamManager:
     async def _monitor_streams(self) -> None:
         """Monitor stream health and restart if needed"""
         cycle_count = 0
-        logger.info("Starting enhanced monitoring loop - checking every 30 seconds")
+        logger.info("Starting enhanced monitoring loop - checking every 60 seconds")
         
         while self.running:
             try:
@@ -212,8 +217,18 @@ class BackgroundStreamManager:
                 socket_connected = self._is_socket_connected()
                 data_flowing = self._is_data_flowing()
                 
-                logger.info("Monitor cycle #%d: socket_connected=%s, data_flowing=%s, tracked_contracts=%d", 
-                           cycle_count, socket_connected, data_flowing, len(self.tracked_contracts))
+                # Only log state changes at INFO level, routine monitoring at DEBUG
+                state_changed = (socket_connected != self._last_socket_connected or 
+                               data_flowing != self._last_data_flowing)
+                
+                if state_changed:
+                    logger.info("Monitor cycle #%d: STATE CHANGE - socket_connected=%s, data_flowing=%s, tracked_contracts=%d", 
+                               cycle_count, socket_connected, data_flowing, len(self.tracked_contracts))
+                    self._last_socket_connected = socket_connected
+                    self._last_data_flowing = data_flowing
+                else:
+                    logger.debug("Monitor cycle #%d: socket_connected=%s, data_flowing=%s, tracked_contracts=%d", 
+                               cycle_count, socket_connected, data_flowing, len(self.tracked_contracts))
                 
                 # Debug data timestamps
                 now = datetime.now(timezone.utc)
@@ -244,15 +259,10 @@ class BackgroundStreamManager:
                     # Check data staleness - alert if no data received recently during potential trading hours
                     await self._check_data_staleness(contract_id, contract)
                 
-                # Log monitoring heartbeat every 10 cycles (10 minutes)
-                if hasattr(self, '_monitor_cycle_count'):
-                    self._monitor_cycle_count += 1
-                else:
-                    self._monitor_cycle_count = 1
-                    
-                if self._monitor_cycle_count % 10 == 0:
-                    logger.info("Background stream monitor heartbeat - monitoring %d contracts", 
-                              len(self.tracked_contracts))
+                # Log monitoring heartbeat every 30 cycles (30 minutes) for operational visibility
+                if cycle_count % 30 == 0:
+                    logger.info("Background stream monitor heartbeat - monitoring %d contracts, cycle #%d", 
+                              len(self.tracked_contracts), cycle_count)
                 
             except asyncio.CancelledError:
                 break
