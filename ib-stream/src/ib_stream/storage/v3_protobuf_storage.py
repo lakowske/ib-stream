@@ -142,36 +142,53 @@ class V3ProtobufStorage(V3StorageBase):
         """
         proto = ProtoTickMessage()
         
-        # Core fields (always present)
-        proto.ts = tick_message.ts
-        proto.st = tick_message.st
-        proto.cid = tick_message.cid
-        proto.tt = tick_message.tt
-        proto.rid = tick_message.rid
+        # Core fields (always present) - add debug logging
+        logger.debug(f"Converting TickMessage to proto: ts={tick_message.ts} (type: {type(tick_message.ts)})")
+        logger.debug(f"TickMessage fields: cid={tick_message.cid}, tt={tick_message.tt}, p={tick_message.p}")
         
-        # Optional price fields (only set if not None)
+        try:
+            # Core field conversions with type safety
+            proto.ts = int(tick_message.ts)
+            proto.st = int(tick_message.st)
+            proto.cid = int(tick_message.cid)
+            proto.tt = str(tick_message.tt)  # tt is string in v3 protobuf
+            proto.rid = int(tick_message.rid)
+            
+        except (TypeError, ValueError) as e:
+            logger.error(f"Type conversion error in protobuf conversion: {e}")
+            logger.error(f"TickMessage values: ts={tick_message.ts}, st={tick_message.st}, cid={tick_message.cid}, tt={tick_message.tt}, rid={tick_message.rid}")
+            logger.error(f"TickMessage types: ts={type(tick_message.ts)}, st={type(tick_message.st)}, cid={type(tick_message.cid)}, tt={type(tick_message.tt)}, rid={type(tick_message.rid)}")
+            raise
+        
+        # Optional price fields (only set if not None) - ensure float conversion
         if tick_message.p is not None:
-            proto.p = tick_message.p
+            try:
+                proto.p = float(tick_message.p)
+            except (TypeError, ValueError) as e:
+                logger.error(f"Error converting price field: {e}, value: {tick_message.p} (type: {type(tick_message.p)})")
+                raise
         if tick_message.s is not None:
-            proto.s = tick_message.s
+            proto.s = float(tick_message.s)
         if tick_message.bp is not None:
-            proto.bp = tick_message.bp
+            proto.bp = float(tick_message.bp)
         if tick_message.bs is not None:
-            proto.bs = tick_message.bs
+            proto.bs = float(tick_message.bs)
         if tick_message.ap is not None:
-            proto.ap = tick_message.ap
+            proto.ap = float(tick_message.ap)
         if tick_message.as_ is not None:
-            setattr(proto, 'as', tick_message.as_)
+            setattr(proto, 'as', float(tick_message.as_))
         if tick_message.mp is not None:
-            proto.mp = tick_message.mp
+            proto.mp = float(tick_message.mp)
         
-        # Optional boolean flags (only set if True)
-        if tick_message.bpl:
-            proto.bpl = True
-        if tick_message.aph:
-            proto.aph = True
-        if tick_message.upt:
-            proto.upt = True
+        # Optional boolean fields (past limits flags)  
+        if tick_message.bpl is not None:
+            # Convert price level to boolean flag (True if price exists and > 0)
+            proto.bpl = bool(tick_message.bpl and tick_message.bpl > 0)
+        if tick_message.aph is not None:
+            # Convert price level to boolean flag (True if price exists and > 0)
+            proto.aph = bool(tick_message.aph and tick_message.aph > 0)
+        if tick_message.upt is not None:
+            proto.upt = bool(tick_message.upt)
         
         return proto
     

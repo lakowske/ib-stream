@@ -36,7 +36,13 @@
       "Bash(./.venv/bin/pip install:*)",
       "Bash(dpkg-deb:*)",
       "Bash(source:*)",
-      "Bash(.venv/bin/supervisorctl:*)"
+      "Bash(.venv/bin/supervisorctl:*)",
+      "Bash(git pull:*)",
+      "Bash(git log:*)",
+      "Bash(export IB_ENVIRONMENT=production)",
+      "Bash(pkill:*)",
+      "Bash(rm:*)",
+      "Bash(cat:*)"
     ],
     "deny": []
   }

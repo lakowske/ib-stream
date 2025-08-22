@@ -313,7 +313,8 @@ if __name__ == "__main__":
     test_state.test_composition_property()
     test_state.test_functoriality_property()
     
-    print("✅ All categorical property tests passed!")
-    print("🔬 State container satisfies categorical laws")
-    print("🏗️ Component decomposition maintains mathematical structure")
-    print("🎯 Refactoring successfully eliminates god object anti-pattern")
+    # All categorical property tests passed successfully
+    # State container satisfies categorical laws
+    # Component decomposition maintains mathematical structure
+    # Refactoring successfully eliminates god object anti-pattern
+    pass  # Tests completed successfully

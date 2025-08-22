@@ -30,6 +30,22 @@ def setup_health_endpoints(app, config):
             
             tws_connected = app_state.is_tws_connected()
             
+            # Check if background streams are flowing data (if background manager exists)
+            background_data_flowing = True  # Default assumption
+            background_status = "healthy"
+            
+            try:
+                if app_state.has_background_stream_manager():
+                    background_manager = app_state.get_background_stream_manager()
+                    if background_manager:
+                        background_data_flowing = background_manager._is_data_flowing()
+                        if tws_connected and not background_data_flowing:
+                            background_status = "degraded"  # Connected but no data
+                        elif not tws_connected:
+                            background_status = "disconnected"
+            except Exception as e:
+                logger.debug("Could not check background data flow: %s", e)
+            
             # Clear active streams if connection is lost (pure state update)
             if not tws_connected and app_state.get_active_stream_count() > 0:
                 logger.warning("TWS disconnected - clearing %d orphaned active streams", 
@@ -72,6 +88,8 @@ def setup_health_endpoints(app, config):
             overall_status = "healthy"
             if not tws_connected:
                 overall_status = "degraded"
+            elif background_status == "degraded":
+                overall_status = "degraded"  # Connected but no data flowing
             elif time_health['time_sync']['status'] == "critical":
                 overall_status = "degraded"
             elif storage_health.get('status') == "critical":
@@ -94,7 +112,8 @@ def setup_health_endpoints(app, config):
                 "background_streaming": {
                     "enabled": app_state.has_background_streaming(),
                     "tracked_contracts": len(current_config.storage.tracked_contracts) if app_state.has_background_streaming() else 0,
-                    "status": "running" if app_state.has_background_streaming() else "disabled"
+                    "status": background_status,
+                    "data_flowing": background_data_flowing
                 },
                 "features": {
                     "sse_streaming": True,
@@ -128,7 +147,7 @@ def setup_health_endpoints(app, config):
             }
         
         try:
-            storage_info = app_state.storage.get_storage_info()
+            storage_info = await app_state.storage.get_storage_info()
             storage_metrics = app_state.storage.get_metrics()
             
             return {

@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, Callable, TypeVar, Generic
 from threading import Lock
 
 from .streaming_app import StreamingApp
-from .storage.multi_storage_v3 import MultiStorageV3
+from .storage.multi_storage_v4 import MultiStorageV4
 from .background_stream_manager import BackgroundStreamManager
 from .config_v2 import StreamConfig
 
@@ -39,7 +39,7 @@ class AppState:
     """
     config: Optional[StreamConfig] = None
     tws_app: Optional[StreamingApp] = None
-    storage: Optional[MultiStorageV3] = None
+    storage: Optional[MultiStorageV4] = None
     background_manager: Optional[BackgroundStreamManager] = None
     active_streams: Dict[str, Any] = None
     _locks: Dict[str, Lock] = None
@@ -68,7 +68,7 @@ class AppState:
             return self  # Identity property
         return replace(self, tws_app=tws_app)
     
-    def with_storage(self, storage: Optional[MultiStorageV3]) -> 'AppState':
+    def with_storage(self, storage: Optional[MultiStorageV4]) -> 'AppState':
         """Pure function: Storage state transformation"""
         if self.storage == storage:
             return self  # Identity property
@@ -113,7 +113,7 @@ class AppState:
         """Functorial operation: preserves structure while transforming TWS app"""
         return self.with_tws_app(func(self.tws_app))
     
-    def map_storage(self, func: Callable[[Optional[MultiStorageV3]], Optional[MultiStorageV3]]) -> 'AppState':
+    def map_storage(self, func: Callable[[Optional[MultiStorageV4]], Optional[MultiStorageV4]]) -> 'AppState':
         """Functorial operation: preserves structure while transforming storage"""
         return self.with_storage(func(self.storage))
     
@@ -199,7 +199,7 @@ class StateContainer:
         """Update TWS app in thread-safe manner"""
         return self.update_state(lambda s: s.with_tws_app(tws_app))
     
-    def update_storage(self, storage: Optional[MultiStorageV3]) -> AppState:
+    def update_storage(self, storage: Optional[MultiStorageV4]) -> AppState:
         """Update storage in thread-safe manner"""
         return self.update_state(lambda s: s.with_storage(storage))
     
@@ -251,7 +251,7 @@ def update_global_tws_app(tws_app: Optional[StreamingApp]) -> AppState:
     return _global_state_container.update_tws_app(tws_app)
 
 
-def update_global_storage(storage: Optional[MultiStorageV3]) -> AppState:
+def update_global_storage(storage: Optional[MultiStorageV4]) -> AppState:
     """Update global storage"""
     return _global_state_container.update_storage(storage)
 
