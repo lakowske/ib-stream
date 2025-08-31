@@ -16,7 +16,9 @@ from ibapi.common import TickAttribBidAsk, TickAttribLast
 from ibapi.wrapper import EWrapper
 
 # Import shared utilities
-from ib_util import IBConnection, load_environment_config
+from ib_util import IBConnection
+# Use config v3 instead of legacy environment config loading
+from .config_v3_adapter import ConfigV3Adapter
 
 from .formatters import (
     BidAskFormatter,
@@ -39,7 +41,9 @@ class StreamingApp(EWrapper):
         EWrapper.__init__(self)
         
         if config is None:
-            config = load_environment_config("stream")
+            # Use config v3 adapter for legacy compatibility
+            config_v3 = ConfigV3Adapter("ib-stream")
+            config = config_v3.to_legacy_format()
         
         # Use composition - hold an IBConnection instance
         self._ib_connection = IBConnection(config)

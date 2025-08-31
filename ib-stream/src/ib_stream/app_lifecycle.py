@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from .config_v2 import create_legacy_compatible_config
+from .config_v3_adapter import create_config_v3, get_config_v3_state
 from .storage import MultiStorage
 from .storage.multi_storage_v3 import MultiStorageV3
 from .streaming_app import StreamingApp
@@ -57,7 +57,7 @@ async def lifespan(_):
     """Lifespan event handler for startup/shutdown"""
     # Startup - Load configuration with current environment variables
     global config
-    config = create_legacy_compatible_config()
+    config = create_config_v3()
     
     logger.info("Starting IB Stream API Server...")
     logger.info("Configuration:")
@@ -213,7 +213,7 @@ def get_app_state():
         logger.info(f"IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
         logger.info(f"IB_STREAM_TRACKED_CONTRACTS: {os.getenv('IB_STREAM_TRACKED_CONTRACTS', 'NOT_SET')}")
         
-        config = create_legacy_compatible_config()
+        config = create_config_v3()
         
         logger.debug("Config created")
         logger.info(f"Config client_id: {config.client_id}")
@@ -230,7 +230,7 @@ def get_app_state():
         logger.info(f"Current config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
         
         # Force reload
-        config = create_legacy_compatible_config()
+        config = create_config_v3()
         logger.info(f"Reloaded config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
         logger.debug("Config reload complete")
     

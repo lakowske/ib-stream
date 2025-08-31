@@ -42,10 +42,15 @@ def setup_environment():
 def load_config(config_override_path=None):
     """Load configuration using the v3 system"""
     try:
-        from ib_util.config_v3 import load_config
+        # Import config_v3 directly without going through ib_util __init__
+        import importlib.util
+        config_v3_path = project_root / "ib-util" / "ib_util" / "config_v3.py"
+        spec = importlib.util.spec_from_file_location("config_v3", config_v3_path)
+        config_v3 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_v3)
         
         config_root = config_override_path or os.getenv('IB_CONFIG_ROOT')
-        config = load_config('ib-stream', config_root)
+        config = config_v3.load_config('ib-stream', config_root)
         
         print(f"📋 Configuration Loaded")
         print(f"   Environment: {config.project.environment}")

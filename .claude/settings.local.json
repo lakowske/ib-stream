@@ -48,7 +48,11 @@
       "Bash(export:*)",
       "Bash(git checkout:*)",
       "Bash(chmod:*)",
-      "Read(/home/seth/Software/dev/**)"
+      "Read(/home/seth/Software/dev/**)",
+      "Bash(IB_CONFIG_ROOT=/home/seth/Software/dev/ib-stream-1/config python ib_stream/config_v3_adapter.py)",
+      "Bash(IB_CONFIG_ROOT=/home/seth/Software/dev/ib-stream-1/config python ib-stream/src/ib_stream/config_v3_adapter.py)",
+      "Bash(timeout:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }
