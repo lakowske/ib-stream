@@ -1,0 +1,23 @@
+# Configuration v3 - Development Environment
+# Overrides for development environment
+
+project:
+  environment: development
+
+gateway:
+  host: 192.168.0.60  # Remote gateway for development
+
+storage:
+  base_path: storage-dev
+  formats:
+    v2_json: true      # Enable for development testing
+    v2_protobuf: false
+    v3_json: true
+    v3_protobuf: false  # Disable to reduce disk usage in dev
+  enable_postgres: false  # No database in development
+  
+logging:
+  level: DEBUG
+  
+performance:
+  max_concurrent_streams: 10  # Lower limits for development

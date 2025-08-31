@@ -1,0 +1,35 @@
+# Configuration v3 - IB Contract Service
+# Service-specific configuration for ib-contract
+
+service:
+  name: ib-contract
+  type: contract_lookup
+  
+server:
+  host: 0.0.0.0
+  port: 8861
+  enable_cors: true
+
+client:
+  id: 375  # Will be overridden by instance generation
+  
+cache:
+  duration_days: 1
+  memory_cache_size: 1000
+  file_cache_enabled: true
+  
+# Development overrides
+development:
+  server:
+    port: 8861
+  client:
+    id: 102
+
+# Production overrides
+production:
+  server: 
+    port: 8861
+  client:
+    id: 852
+  cache:
+    memory_cache_size: 5000  # Larger cache in production

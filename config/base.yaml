@@ -1,0 +1,40 @@
+# Configuration v3 - Base Settings
+# This file contains shared configuration used by all services
+
+# Project metadata
+project:
+  name: ib-stream
+  version: "3.0.0"
+  environment: development  # development, production
+
+# IB Gateway connection settings
+gateway:
+  host: 192.168.0.60
+  ports: [4002, 4001]  # Primary and fallback ports
+  connection_timeout: 10
+  reconnect_attempts: 5
+
+# Storage configuration  
+storage:
+  enabled: true
+  base_path: storage-dev
+  formats:
+    v2_json: false
+    v2_protobuf: false  
+    v3_json: true
+    v3_protobuf: true
+  enable_postgres: false
+  enable_metrics: true
+  buffer_size: 100
+  max_file_size_mb: 100
+
+# Logging configuration
+logging:
+  level: DEBUG
+  format: detailed
+  file_rotation: daily
+
+# Performance settings
+performance:
+  max_concurrent_streams: 10
+  default_timeout_seconds: null  # null = no timeout

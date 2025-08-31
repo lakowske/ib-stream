@@ -1,0 +1,21 @@
+# Configuration v3 - Production Environment  
+# Overrides for production environment
+
+project:
+  environment: production
+
+storage:
+  base_path: storage
+  formats:
+    v2_json: false        # Disable legacy v2 formats in production
+    v2_protobuf: false    
+    v3_json: true         # Enable v3 formats for efficiency
+    v3_protobuf: true
+  enable_postgres: true   # Full database indexing in production
+  buffer_size: 1000       # Larger buffers for production throughput
+  
+logging:
+  level: INFO             # Less verbose logging in production
+  
+performance:
+  max_concurrent_streams: 100  # Higher limits for production load

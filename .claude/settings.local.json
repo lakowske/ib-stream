@@ -42,7 +42,13 @@
       "Bash(export IB_ENVIRONMENT=production)",
       "Bash(pkill:*)",
       "Bash(rm:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(netstat:*)",
+      "Bash(env)",
+      "Bash(export:*)",
+      "Bash(git checkout:*)",
+      "Bash(chmod:*)",
+      "Read(/home/seth/Software/dev/**)"
     ],
     "deny": []
   }
