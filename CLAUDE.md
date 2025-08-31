@@ -88,16 +88,61 @@ source .venv/bin/activate && source .venv/bin/activate && python ib.py dev tools
 source .venv/bin/activate && source .venv/bin/activate && python ib.py dev clean                    # Clean build artifacts
 ```
 
-## Configuration System v2
+## Configuration System v3 🆕
 
-The project uses a modern type-safe configuration system with automatic fallback:
+The project uses Configuration System v3 - a complete rewrite with Category Theory foundations:
 
 ### Key Features
-- **Type-safe validation** with Pydantic schemas
-- **Environment-specific configurations** (development, production, staging)
+- **YAML-based hierarchical configuration** (base → environment → service → env vars)
+- **Category Theory structures** (Monads, Functors, Monoids) for mathematical guarantees
+- **Type-safe validation** with Pydantic schemas + categorical constraints  
+- **Monadic error handling** (no exceptions in configuration pipeline)
+- **Standalone debugging** (no supervisor dependency required)
 - **Hot-reload capabilities** for development
-- **Automatic instance isolation** with unique client IDs and ports
-- **Backward compatibility** with legacy configuration
+- **2 environment variables** (vs 20+ in legacy system)
+- **Full backward compatibility** with existing services
+
+### Quick Start - Configuration v3
+
+```bash
+# Standalone debugging (your new best friend!)
+python ib-stream/debug.py --validate-only    # Just validate config
+python ib-stream/debug.py --show-config      # Show loaded config
+python ib-stream/debug.py --run              # Run service standalone
+
+# Configuration validation
+python -c "from ib_util.config_v3 import validate_config; print('✅ Valid' if validate_config('ib-stream') else '❌ Invalid')"
+
+# Load typed configuration in code
+python -c "from ib_util.config_v3 import load_config; cfg = load_config('ib-stream'); print(f'Client ID: {cfg.service.client.id}')"
+
+# Categorical features (advanced)  
+python -c "from ib_util.config_v3_categorical import validate_port; print('Port 8080:', validate_port(8080).is_success())"
+```
+
+### Configuration Files Structure
+
+```
+config/
+├── base.yaml                 # Shared defaults (all services)
+├── development.yaml          # Development environment overrides  
+├── production.yaml           # Production environment overrides
+└── services/
+    ├── ib-stream.yaml        # ib-stream specific configuration
+    └── ib-contract.yaml      # ib-contract specific configuration
+```
+
+### Environment Variables (Simplified!)
+
+**Required (only 2!):**
+- `IB_ENVIRONMENT=development` or `production`
+- `IB_CONFIG_ROOT=/path/to/config` (optional, defaults to `./config`)
+
+**Optional overrides (rare use):**
+- `IB_GATEWAY_HOST=192.168.0.60` (override gateway host)
+- `IB_CLIENT_ID=101` (override client ID)
+
+**Gone are the days of 20+ environment variables!**
 
 ### Production Configuration
 - **ib-stream**: Client ID 851, Port 8851
@@ -105,11 +150,33 @@ The project uses a modern type-safe configuration system with automatic fallback
 - **Environment**: Production server (192.168.0.60) using localhost connections
 - **Storage**: Enabled with background streaming for MNQ contract
 
-### Configuration Files
-- `ib-stream/config/production.env` - Production environment settings
-- `ib-stream/config/development.env` - Development environment settings  
-- `ib-stream/config/instance.env` - Auto-generated instance-specific values
-- `ib-stream/config/production-server.env` - Production server specific settings
+### Configuration v3 Documentation
+
+📖 **Complete Documentation Available:**
+- [`docs/configuration-v3-architecture.md`](docs/configuration-v3-architecture.md) - Complete architecture and design
+- [`docs/configuration-v3-migration-guide.md`](docs/configuration-v3-migration-guide.md) - Migration from legacy system  
+- [`docs/configuration-v3-developer-guide.md`](docs/configuration-v3-developer-guide.md) - Developer guide and examples
+
+### Configuration Files (v3 System)
+- `config/base.yaml` - Shared defaults for all services
+- `config/development.yaml` - Development environment overrides
+- `config/production.yaml` - Production environment overrides
+- `config/services/ib-stream.yaml` - ib-stream service configuration
+- `config/services/ib-contract.yaml` - ib-contract service configuration
+
+### Configuration v3 Features
+
+**Mathematical Foundations:**
+- **Result Monads**: Compositional error handling (no exceptions)
+- **Configuration Monoids**: Associative merging with identity laws
+- **Categorical Constraints**: Type-safe validation (ports: 1024-65535, client IDs: 1-999999)
+- **Functorial Transformations**: Structure-preserving config operations
+
+**Developer Experience:**
+- **Standalone Debugging**: `python ib-stream/debug.py --run`
+- **Hot Reload**: Configuration changes applied immediately (development)
+- **Type Safety**: Full IDE support with Pydantic models
+- **Clear Validation**: Descriptive error messages with categorical constraints
 
 ## Background Stream Health Monitoring
 
@@ -187,28 +254,47 @@ source .venv/bin/activate && source .venv/bin/activate && python ib.py services 
 ./supervisor-wrapper.sh stop all
 ```
 
-## Configuration Management
+## Configuration v3 Management 🆕
 
-### Validate Configuration System
+### Quick Configuration Commands
 
 ```bash
-# Check entire configuration system health
+# Standalone debugging (fastest way to test config)
+python ib-stream/debug.py --validate-only         # Validate configuration only
+python ib-stream/debug.py --show-config           # Show loaded configuration
+python ib-stream/debug.py --run                   # Run service with config v3
+
+# Configuration validation (new v3 system)
+python -c "from ib_util.config_v3 import validate_config; print('✅ Valid' if validate_config('ib-stream') else '❌ Invalid')"
+python -c "from ib_util.config_v3 import validate_config; print('✅ Valid' if validate_config('ib-contract') else '❌ Invalid')"
+
+# Load and inspect configuration (type-safe)
+python -c "from ib_util.config_v3 import load_config; cfg = load_config('ib-stream'); print(f'Client: {cfg.service.client.id}, Port: {cfg.service.server.port}')"
+
+# Categorical validation (advanced)
+python -c "from ib_util.config_v3_categorical import validate_port, validate_client_id; print('Port:', validate_port(8851).is_success()); print('Client:', validate_client_id(101).is_success())"
+```
+
+### Legacy Configuration Management (Still Supported)
+
+```bash
+# Check entire configuration system health (legacy ib.py)
 source .venv/bin/activate && python ib.py config validate
 
-# Show detailed validation results
+# Show detailed validation results (legacy ib.py)
 source .venv/bin/activate && python ib.py config validate --verbose
 ```
 
-### View Current Configuration
+### View Current Configuration (Legacy)
 
 ```bash
-# Show summary for all services
+# Show summary for all services (legacy ib.py)
 source .venv/bin/activate && python ib.py config show
 
-# Show detailed configuration for specific service
+# Show detailed configuration for specific service (legacy ib.py)  
 source .venv/bin/activate && python ib.py config show --service ib-stream --format detailed
 
-# Show configuration in JSON format
+# Show configuration in JSON format (legacy ib.py)
 source .venv/bin/activate && python ib.py config show --service ib-stream --format json
 ```
 
@@ -475,39 +561,37 @@ source .venv/bin/activate && python ib.py services logs --service ib-stream-remo
 
 The CLI provides better error handling, help systems, and extensibility compared to the legacy Makefile approach.
 
-## Recent Critical Fixes and New Features (v2.1)
+## Recent Critical Fixes and New Features (v3.0)
 
-### 🏥 Background Stream Health Monitoring ✅ NEW FEATURE
-- **Added comprehensive health monitoring**: Trading hours awareness with market status detection
-  - **New Endpoints**: `/background/health/summary`, `/background/health/{contract_id}`, `/background/health/detailed`
-  - **Health Classifications**: HEALTHY, DEGRADED, UNHEALTHY, OFF_HOURS, UNKNOWN
+### 🆕 Configuration System v3 ✅ NEW FEATURE
+- **Complete configuration system rewrite**: Category Theory foundations with mathematical guarantees
+  - **YAML-based hierarchy**: base → environment → service → env vars (2 vars total vs 20+)
+  - **Standalone debugging**: `python ib-stream/debug.py --run` (no supervisor dependency)
+  - **Category Theory**: Monads, Functors, Monoids for compositional configuration operations
+  - **Type Safety**: Full Pydantic validation with categorical constraints
+  - **Documentation**: Complete architecture, migration guide, and developer documentation
+  - **Result**: Dramatically simplified configuration with mathematical guarantees about composition
+
+### 🏥 Background Stream Health Monitoring ✅ ESTABLISHED FEATURE
+- **Comprehensive health monitoring**: Trading hours awareness with market status detection
+  - **Endpoints**: `/background/health/summary`, `/background/health/{contract_id}`, `/background/health/detailed`
+  - **Classifications**: HEALTHY, DEGRADED, UNHEALTHY, OFF_HOURS, UNKNOWN
   - **Features**: 15-minute data staleness detection, contract-specific health assessment
   - **Result**: Full visibility into background stream health with market-aware expectations
 
-### 🔄 Dual Storage Pattern for Contract Caching ✅ NEW FEATURE  
-- **Implemented dual storage architecture**: Support both symbol-based and contract ID lookups
+### 🔄 Dual Storage Pattern for Contract Caching ✅ ESTABLISHED FEATURE  
+- **Dual storage architecture**: Support both symbol-based and contract ID lookups
   - **Symbol Cache**: `YYYYMMDD-contracts_SYMBOL_TYPE.json` for traditional lookups
   - **Contract ID Cache**: `YYYYMMDD-contract_{ID}.json` for direct ID-based access  
   - **Performance**: Sub-20ms response times for cached contract ID lookups
   - **Result**: Fast contract resolution without requiring prior symbol knowledge
 
-### 🛠️ Selective Service Management ✅ NEW FEATURE
-- **Added granular service control**: Restart individual services without affecting others
-  - **New Commands**: `restart-service`, `stop-service`, `start-service`, `test-restart`
+### 🛠️ Selective Service Management ✅ ESTABLISHED FEATURE
+- **Granular service control**: Restart individual services without affecting others
+  - **Commands**: `restart-service`, `stop-service`, `start-service`, `test-restart`
   - **Service Isolation**: ib-contract can be restarted independently of ib-stream
   - **Health Testing**: Integrated health validation after service operations
   - **Result**: Safe production service management with zero downtime for unaffected services
-
-### Storage System Issues ✅ RESOLVED
-- **Fixed MultiStorageV3 initialization error**: `unsupported operand type(s) for /: 'str' and 'str'`
-  - **Solution**: Convert storage_path string to Path object in api_server.py
-  - **Result**: All 4 storage formats now working (v2/v3 JSON + Protobuf)
-
-### Health Endpoint Synchronization ✅ RESOLVED  
-- **Fixed health endpoints showing incorrect status**: Storage and background streaming showed as disabled despite being active
-  - **Root Cause**: Health endpoints used outdated global variables instead of startup-created objects
-  - **Solution**: Added update_global_state() function to sync global variables
-  - **Result**: Health endpoints now reflect actual running state accurately
 
 ### Production Verification ✅ CONFIRMED
 ```bash
@@ -515,7 +599,7 @@ The CLI provides better error handling, help systems, and extensibility compared
 source .venv/bin/activate && python ib.py services status                    # ✅ Services running
 curl -s http://localhost:8851/health | jq .     # ✅ Accurate health status
 find ./ib-stream/storage -type f | wc -l        # ✅ 8+ data files active
-ls -lh ./ib-stream/storage/v*/protobuf/2025/*/*/ # ✅ V3 59% space reduction
+python ib-stream/debug.py --validate-only       # ✅ Config v3 validation
 ```
 
-These fixes ensure the configuration system v2 is fully functional and production-ready.
+These features ensure the system is production-ready with Configuration v3 providing a robust foundation.
