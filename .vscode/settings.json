@@ -1,0 +1,37 @@
+{
+    "python.defaultInterpreter": "${workspaceFolder}/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/ib-util",
+        "${workspaceFolder}/ib-stream/src",
+        "${workspaceFolder}/ib-contract"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.linting.enabled": true,
+    "python.linting.ruffEnabled": true,
+    "python.formatting.provider": "ruff",
+    "python.linting.ruffArgs": [
+        "--config=${workspaceFolder}/pyproject.toml"
+    ],
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".mypy_cache": true,
+        ".pytest_cache": true,
+        "**/.DS_Store": true
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".mypy_cache": true,
+        ".pytest_cache": true,
+        "storage*": true,
+        "logs": true
+    },
+    "files.watcherExclude": {
+        "**/__pycache__/**": true,
+        "storage*/**": true,
+        "logs/**": true
+    }
+}

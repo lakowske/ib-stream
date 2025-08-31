@@ -1,14 +1,16 @@
 """
-Configuration management for IB Stream API Server.
+Configuration management for IB Stream API Server - Configuration System v3.
+
+This module uses Configuration System v3 with YAML-based hierarchical configuration
+and provides compatibility interfaces for existing code.
 """
 
-import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 from pathlib import Path
 
-# Import enhanced environment loading from ib-util
-from ib_util import load_environment_file_with_detection
+# Import Configuration System v3
+from ib_util import load_config, AppConfig
 
 
 @dataclass
@@ -40,7 +42,7 @@ class TrackedContract:
 
 @dataclass
 class StorageConfig:
-    """Configuration for storage system"""
+    """Configuration for storage system - mirrors Configuration v3 StorageConfig"""
     
     # Enable/disable storage backends
     enable_storage: bool = True
@@ -54,7 +56,7 @@ class StorageConfig:
     enable_v3_protobuf: bool = True
     
     # Other storage backends
-    enable_postgres_index: bool = True
+    enable_postgres_index: bool = False  # Default to disabled
     
     # Control whether client-requested streams are stored to disk
     # Background streams always store regardless of this setting
@@ -109,195 +111,97 @@ class StorageConfig:
 
 @dataclass
 class ServerConfig:
-    """Configuration for the API server"""
+    """Configuration for the API server - created from Configuration v3"""
 
     # TWS Connection
-    client_id: int = 2
-    host: str = "127.0.0.1"
-    ports: List[int] = None
+    client_id: int = 101
+    host: str = "192.168.0.60"
+    ports: List[int] = field(default_factory=lambda: [4002, 4001])
 
-    # Streaming Limits
-    max_concurrent_streams: int = 50
+    # Streaming Limits  
+    max_concurrent_streams: int = 10
     default_timeout_seconds: Optional[int] = None  # No timeout by default
     buffer_size: int = 100
 
     # Connection Management
-    reconnect_attempts: int = 3
-    connection_timeout: int = 5
+    reconnect_attempts: int = 5
+    connection_timeout: int = 10
     heartbeat_interval: int = 30
 
     # Server Settings
     server_host: str = "0.0.0.0"
-    server_port: int = 8000
+    server_port: int = 8851
 
     # Logging
-    log_level: str = "INFO"
+    log_level: str = "DEBUG"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
     
     # Storage Configuration
-    storage: StorageConfig = None
-
-    def __post_init__(self):
-        if self.ports is None:
-            # Default ports: Paper TWS, Live TWS, Paper Gateway, Live Gateway
-            self.ports = [7497, 7496, 4002, 4001]
-        if self.storage is None:
-            self.storage = StorageConfig()
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
 
-def load_storage_config_from_env() -> StorageConfig:
-    """Load storage configuration from environment variables"""
-    config = StorageConfig()
-    
-    # Enable/disable features
-    config.enable_storage = os.getenv("IB_STREAM_ENABLE_STORAGE", "true").lower() == "true"
-    
-    # v2 storage formats (legacy)
-    config.enable_json = os.getenv("IB_STREAM_ENABLE_JSON", "true").lower() == "true"
-    config.enable_protobuf = os.getenv("IB_STREAM_ENABLE_PROTOBUF", "true").lower() == "true"
-    
-    # v3 storage formats (optimized)
-    config.enable_v3_json = os.getenv("IB_STREAM_ENABLE_V3_JSON", "true").lower() == "true"
-    config.enable_v3_protobuf = os.getenv("IB_STREAM_ENABLE_V3_PROTOBUF", "true").lower() == "true"
-    
-    # Other storage backends
-    config.enable_postgres_index = os.getenv("IB_STREAM_ENABLE_POSTGRES", "true").lower() == "true"
-    config.enable_client_stream_storage = os.getenv("IB_STREAM_ENABLE_CLIENT_STREAM_STORAGE", "true").lower() == "true"
-    
-    # Storage paths
-    storage_base = os.getenv("IB_STREAM_STORAGE_PATH")
-    if storage_base:
-        config.storage_base_path = Path(storage_base)
-        
-    json_path = os.getenv("IB_STREAM_JSON_PATH")
-    if json_path:
-        config.json_storage_path = Path(json_path)
-        
-    protobuf_path = os.getenv("IB_STREAM_PROTOBUF_PATH")
-    if protobuf_path:
-        config.protobuf_storage_path = Path(protobuf_path)
-    
-    # PostgreSQL configuration
-    config.postgres_url = os.getenv("IB_STREAM_POSTGRES_URL", config.postgres_url)
-    config.postgres_schema = os.getenv("IB_STREAM_POSTGRES_SCHEMA", config.postgres_schema)
-    
-    # Performance settings
-    config.write_batch_size = int(os.getenv("IB_STREAM_BATCH_SIZE", config.write_batch_size))
-    config.write_batch_timeout_seconds = float(os.getenv("IB_STREAM_BATCH_TIMEOUT", config.write_batch_timeout_seconds))
-    config.max_write_queue_size = int(os.getenv("IB_STREAM_QUEUE_SIZE", config.max_write_queue_size))
-    config.max_concurrent_writers = int(os.getenv("IB_STREAM_WRITERS", config.max_concurrent_writers))
-    
-    # File rotation
-    config.rotation_interval_hours = int(os.getenv("IB_STREAM_ROTATION_HOURS", config.rotation_interval_hours))
-    config.max_file_size_mb = int(os.getenv("IB_STREAM_MAX_FILE_SIZE", config.max_file_size_mb))
-    
-    # Retention
-    config.json_retention_days = int(os.getenv("IB_STREAM_JSON_RETENTION", config.json_retention_days))
-    config.protobuf_retention_days = int(os.getenv("IB_STREAM_PROTOBUF_RETENTION", config.protobuf_retention_days))
-    config.health_records_retention_days = int(os.getenv("IB_STREAM_HEALTH_RETENTION", config.health_records_retention_days))
-    
-    # Metrics
-    config.enable_metrics = os.getenv("IB_STREAM_ENABLE_METRICS", "true").lower() == "true"
-    config.metrics_window_size = int(os.getenv("IB_STREAM_METRICS_WINDOW", config.metrics_window_size))
-    config.health_check_interval_seconds = int(os.getenv("IB_STREAM_HEALTH_INTERVAL", config.health_check_interval_seconds))
-    
-    # Health monitoring
-    config.health_staleness_threshold_minutes = int(os.getenv("IB_STREAM_HEALTH_STALENESS_MINUTES", config.health_staleness_threshold_minutes))
-    config.trading_hours_cache_ttl_hours = int(os.getenv("IB_STREAM_TRADING_HOURS_TTL_HOURS", config.trading_hours_cache_ttl_hours))
-    
-    # Tracked contracts
-    config.max_tracked_contracts = int(os.getenv("IB_STREAM_MAX_TRACKED", config.max_tracked_contracts))
-    config.background_stream_reconnect_delay = int(os.getenv("IB_STREAM_RECONNECT_DELAY", config.background_stream_reconnect_delay))
-    
-    # Parse tracked contracts from environment
-    # Format: "contract_id:symbol:tick_types:buffer_hours,contract_id:symbol:tick_types:buffer_hours"
-    # Example: "265598:AAPL:bid_ask;last:1,711280073:MNQ:bid_ask;last:2"
-    tracked_env = os.getenv("IB_STREAM_TRACKED_CONTRACTS")
-    if tracked_env:
-        config.tracked_contracts = _parse_tracked_contracts_env(tracked_env)
-    
-    return config
-
-
-def _parse_tracked_contracts_env(env_value: str) -> List[TrackedContract]:
-    """Parse tracked contracts from environment variable string"""
-    contracts = []
-    
-    try:
-        for contract_str in env_value.split(','):
-            contract_str = contract_str.strip()
-            if not contract_str:
-                continue
-                
-            parts = contract_str.split(':')
-            if len(parts) < 2:
-                raise ValueError(f"Invalid contract format: {contract_str}. Expected contract_id:symbol[:tick_types[:buffer_hours]]")
-            
-            contract_id = int(parts[0])
-            symbol = parts[1]
-            
-            # Parse tick types (default: bid_ask,last)
-            tick_types = ["bid_ask", "last"]
-            if len(parts) > 2 and parts[2]:
-                tick_types = [t.strip() for t in parts[2].split(';') if t.strip()]
-            
-            # Parse buffer hours (default: 1)
-            buffer_hours = 1
-            if len(parts) > 3 and parts[3]:
-                buffer_hours = int(parts[3])
-            
-            contract = TrackedContract(
-                contract_id=contract_id,
-                symbol=symbol,
-                tick_types=tick_types,
-                buffer_hours=buffer_hours
+def convert_v3_to_legacy_storage(v3_config: AppConfig) -> StorageConfig:
+    """Convert Configuration v3 storage config to legacy StorageConfig format"""
+    # Extract tracked contracts if they exist
+    tracked_contracts = []
+    if (v3_config.service.streaming and 
+        hasattr(v3_config.service.streaming, 'tracked_contracts')):
+        for contract_config in v3_config.service.streaming.tracked_contracts:
+            tracked_contract = TrackedContract(
+                contract_id=contract_config.contract_id,
+                symbol=contract_config.symbol,
+                tick_types=contract_config.tick_types,
+                buffer_hours=contract_config.buffer_hours
             )
-            contracts.append(contract)
-            
-    except Exception as e:
-        raise ValueError(f"Failed to parse tracked contracts from env: {e}")
+            tracked_contracts.append(tracked_contract)
     
-    return contracts
+    return StorageConfig(
+        enable_storage=v3_config.storage.enabled,
+        enable_json=v3_config.storage.formats.v2_json,
+        enable_protobuf=v3_config.storage.formats.v2_protobuf,
+        enable_v3_json=v3_config.storage.formats.v3_json,
+        enable_v3_protobuf=v3_config.storage.formats.v3_protobuf,
+        enable_postgres_index=v3_config.storage.enable_postgres,
+        enable_metrics=v3_config.storage.enable_metrics,
+        storage_base_path=Path(v3_config.storage.base_path),
+        write_batch_size=v3_config.storage.buffer_size,
+        max_file_size_mb=v3_config.storage.max_file_size_mb,
+        tracked_contracts=tracked_contracts
+    )
 
 
-def load_config_from_env() -> ServerConfig:
-    """Load configuration from environment variables"""
-    config = ServerConfig()
-
-    # TWS Connection
-    config.client_id = int(os.getenv("IB_STREAM_CLIENT_ID", config.client_id))
-    config.host = os.getenv("IB_STREAM_HOST", config.host)
-
-    # Parse ports from comma-separated string
-    ports_env = os.getenv("IB_STREAM_PORTS")
-    if ports_env:
-        config.ports = [int(p.strip()) for p in ports_env.split(",")]
-
-    # Streaming Limits
-    config.max_concurrent_streams = int(os.getenv("IB_STREAM_MAX_STREAMS", config.max_concurrent_streams))
-    # Handle timeout - can be None for no timeout
-    timeout_env = os.getenv("IB_STREAM_STREAM_TIMEOUT")
-    if timeout_env:
-        config.default_timeout_seconds = int(timeout_env)
-    config.buffer_size = int(os.getenv("IB_STREAM_BUFFER_SIZE", config.buffer_size))
-
-    # Connection Management
-    config.reconnect_attempts = int(os.getenv("IB_STREAM_RECONNECT_ATTEMPTS", config.reconnect_attempts))
-    config.connection_timeout = int(os.getenv("IB_STREAM_CONNECTION_TIMEOUT", config.connection_timeout))
-    config.heartbeat_interval = int(os.getenv("IB_STREAM_HEARTBEAT_INTERVAL", config.heartbeat_interval))
-
-    # Server Settings
-    config.server_host = os.getenv("HOST", config.server_host)
-    config.server_port = int(os.getenv("PORT", config.server_port))
-
-    # Logging
-    config.log_level = os.getenv("IB_STREAM_LOG_LEVEL", config.log_level)
-    config.log_format = os.getenv("IB_STREAM_LOG_FORMAT", config.log_format)
+def convert_v3_to_legacy_server(v3_config: AppConfig) -> ServerConfig:
+    """Convert Configuration v3 to legacy ServerConfig format"""
+    storage_config = convert_v3_to_legacy_storage(v3_config)
     
-    # Storage configuration
-    config.storage = load_storage_config_from_env()
+    return ServerConfig(
+        client_id=v3_config.service.client.id,
+        host=v3_config.gateway.host,
+        ports=v3_config.gateway.ports,
+        max_concurrent_streams=v3_config.performance.max_concurrent_streams,
+        default_timeout_seconds=v3_config.performance.default_timeout_seconds,
+        buffer_size=v3_config.storage.buffer_size,
+        reconnect_attempts=v3_config.gateway.reconnect_attempts,
+        connection_timeout=v3_config.gateway.connection_timeout,
+        server_host=v3_config.service.server.host,
+        server_port=v3_config.service.server.port,
+        log_level=v3_config.logging.level,
+        storage=storage_config
+    )
 
-    return config
+
+def create_config() -> ServerConfig:
+    """Create and validate configuration using Configuration System v3"""
+    # Load configuration using v3 system
+    v3_config = load_config('ib-stream')
+    
+    # Convert to legacy format for backward compatibility
+    legacy_config = convert_v3_to_legacy_server(v3_config)
+    
+    # Validate the converted configuration
+    validate_config(legacy_config)
+    
+    return legacy_config
 
 
 def validate_config(config: ServerConfig) -> None:
@@ -353,24 +257,7 @@ def validate_config(config: ServerConfig) -> None:
         raise ValueError("Background stream reconnect delay must be at least 1 second")
 
 
-def load_environment_file(env_file_path: Optional[str] = None) -> None:
-    """Load environment variables from a .env file using ib-util enhanced parser"""
-    load_environment_file_with_detection(env_file_path)
-
-
-def create_config() -> ServerConfig:
-    """Create and validate configuration"""
-    # Load instance-specific configuration first
-    load_environment_file("config/instance.env")
-    
-    # Load environment file (if present)
-    load_environment_file()
-    
-    config = load_config_from_env()
-    validate_config(config)
-    return config
-
-
+# Legacy compatibility functions
 def get_tick_types() -> List[str]:
     """Get list of valid tick types"""
     return ["Last", "AllLast", "BidAsk", "MidPoint"]

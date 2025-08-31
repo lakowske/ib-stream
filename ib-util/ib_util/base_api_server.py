@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional
 import uvicorn
 from fastapi import FastAPI
 
-from .config_loader import load_environment_config
+# Configuration System v3 - load_environment_config is deprecated
+# Services now use their own config.py modules for configuration
 from .logging_config import configure_service_logging, log_environment_info
 
 
@@ -53,8 +54,9 @@ class BaseAPIServer(ABC):
         # Configure logging
         self.logger = configure_service_logging(service_name, verbose=verbose_logging)
         
-        # Load configuration
-        self.config = load_environment_config(service_type)
+        # Configuration System v3 - Services load their own configuration
+        # This base class no longer loads configuration directly
+        self.config = None
         
         # Set defaults if not provided
         if title is None:

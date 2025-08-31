@@ -31,8 +31,9 @@ logger = get_logger(__name__)
 class ContractLookupApp(IBConnection):
     def __init__(self, config=None):
         if config is None:
-            from ib_util import load_environment_config
-            config = load_environment_config("contracts")
+            # Configuration System v3 - Use direct connection config
+            from ib_util.connection import ConnectionConfig
+            config = ConnectionConfig()
         
         super().__init__(config)
         self.contracts = []

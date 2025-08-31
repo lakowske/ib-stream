@@ -1,0 +1,86 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug IB Stream (Development)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/ib-stream/src/ib_stream/api_server.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src",
+                "IB_ENVIRONMENT": "development",
+                "IB_CONFIG_ROOT": "${workspaceFolder}/config"
+            },
+            "args": [],
+            "justMyCode": false,
+            "stopOnEntry": false,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Debug IB Stream (Standalone)",
+            "type": "python", 
+            "request": "launch",
+            "program": "${workspaceFolder}/ib-stream/debug_runner.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src",
+                "IB_ENVIRONMENT": "development",
+                "IB_CONFIG_ROOT": "${workspaceFolder}/config"
+            },
+            "args": [],
+            "justMyCode": false,
+            "stopOnEntry": false,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Debug IB Contract Service",
+            "type": "python",
+            "request": "launch", 
+            "program": "${workspaceFolder}/ib-contract/api_server.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src",
+                "IB_ENVIRONMENT": "development",
+                "IB_CONFIG_ROOT": "${workspaceFolder}/config"
+            },
+            "args": [],
+            "justMyCode": false,
+            "stopOnEntry": false,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Debug Config Validation",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/ib.py",
+            "console": "integratedTerminal", 
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src"
+            },
+            "args": ["config", "validate", "--verbose"],
+            "justMyCode": false,
+            "stopOnEntry": false,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Debug Contract Lookup",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/ib-contract/contract_lookup.py", 
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src"
+            },
+            "args": ["AAPL"],
+            "justMyCode": false,
+            "stopOnEntry": false,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        }
+    ]
+}

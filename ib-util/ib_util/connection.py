@@ -14,7 +14,19 @@ from typing import Optional, Callable, Any
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 
-from .config_loader import ConnectionConfig
+from dataclasses import dataclass
+from typing import List
+
+@dataclass
+class ConnectionConfig:
+    """Configuration for IB API connection"""
+    client_id: int = 1
+    host: str = "127.0.0.1"
+    ports: List[int] = None
+    
+    def __post_init__(self):
+        if self.ports is None:
+            self.ports = [7497, 7496, 4002, 4001]
 
 
 logger = logging.getLogger(__name__)
@@ -195,9 +207,8 @@ def create_connection(service_type: str = "stream") -> IBConnection:
     Returns:
         IBConnection: Configured but not yet connected instance
     """
-    from .config_loader import load_environment_config
-    
-    config = load_environment_config(service_type)
+    # Create default connection configuration
+    config = ConnectionConfig()
     return IBConnection(config)
 
 
