@@ -66,10 +66,20 @@ class LoggingConfig(BaseModel):
     @field_validator('level')
     @classmethod
     def validate_level(cls, v):
-        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-        if v.upper() not in valid_levels:
-            raise ValueError(f'Invalid log level: {v}. Must be one of {valid_levels}')
-        return v.upper()
+        # Use categorical constraint validation instead of manual checking
+        try:
+            from .categorical import validate_log_level
+            result = validate_log_level(v)
+            if result.is_success():
+                return result.unwrap()
+            else:
+                raise ValueError(result.error())
+        except ImportError:
+            # Fallback to manual validation if categorical module not available
+            valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+            if v.upper() not in valid_levels:
+                raise ValueError(f'Invalid log level: {v}. Must be one of {valid_levels}')
+            return v.upper()
 
 
 class PerformanceConfig(BaseModel):
@@ -160,16 +170,26 @@ class ConfigLoader:
             raise IOError(f"Error reading {filepath}: {e}")
     
     def merge_configs(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-        """Deep merge two configuration dictionaries"""
-        result = base.copy()
+        """
+        Deep merge two configuration dictionaries using categorical monoid.
         
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = self.merge_configs(result[key], value)
-            else:
-                result[key] = value
-                
-        return result
+        Falls back to manual merge if categorical module not available.
+        """
+        try:
+            from .categorical import DictMonoid
+            monoid = DictMonoid()
+            return monoid.combine(base, override)
+        except ImportError:
+            # Fallback to manual deep merge
+            result = base.copy()
+            
+            for key, value in override.items():
+                if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                    result[key] = self.merge_configs(result[key], value)
+                else:
+                    result[key] = value
+                    
+            return result
     
     def get_environment(self) -> Environment:
         """Get current environment from environment variable"""
