@@ -8,6 +8,7 @@ and provides compatibility interfaces for existing code.
 from dataclasses import dataclass, field
 from typing import List, Optional
 from pathlib import Path
+import threading
 
 # Import Configuration System v3
 from ib_util import load_config, AppConfig
@@ -190,18 +191,53 @@ def convert_v3_to_legacy_server(v3_config: AppConfig) -> ServerConfig:
     )
 
 
+# Configuration cache to avoid repeated expensive loading
+_config_cache: Optional[ServerConfig] = None
+_cache_lock = threading.Lock()
+
 def create_config() -> ServerConfig:
-    """Create and validate configuration using Configuration System v3"""
-    # Load configuration using v3 system
-    v3_config = load_config('ib-stream')
+    """Create and validate configuration using Configuration System v3 with caching"""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    # Convert to legacy format for backward compatibility
-    legacy_config = convert_v3_to_legacy_server(v3_config)
+    global _config_cache
     
-    # Validate the converted configuration
-    validate_config(legacy_config)
+    # Check cache first
+    if _config_cache is not None:
+        logger.debug("Using cached configuration")
+        return _config_cache
     
-    return legacy_config
+    # Thread-safe cache population
+    with _cache_lock:
+        # Double-check pattern
+        if _config_cache is not None:
+            logger.debug("Using cached configuration (double-check)")
+            return _config_cache
+        
+        logger.info("Loading Configuration System v3...")
+        
+        # Load configuration using v3 system
+        v3_config = load_config('ib-stream')
+        
+        # Convert to legacy format for backward compatibility
+        legacy_config = convert_v3_to_legacy_server(v3_config)
+        
+        # Validate the converted configuration
+        validate_config(legacy_config)
+        
+        # Cache the result
+        _config_cache = legacy_config
+        
+        logger.info("Configuration System v3 loaded and cached successfully")
+        
+        return legacy_config
+
+
+def clear_config_cache():
+    """Clear the configuration cache - useful for testing or hot-reload scenarios"""
+    global _config_cache
+    with _cache_lock:
+        _config_cache = None
 
 
 def validate_config(config: ServerConfig) -> None:

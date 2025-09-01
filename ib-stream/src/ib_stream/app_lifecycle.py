@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from .config_v3_adapter import create_config_v3, get_config_v3_state
+from .config import create_config
 from .storage import MultiStorage
 from .storage.multi_storage_v3 import MultiStorageV3
 from .streaming_app import StreamingApp
@@ -213,7 +213,7 @@ def get_app_state():
         logger.info(f"IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
         logger.info(f"IB_STREAM_TRACKED_CONTRACTS: {os.getenv('IB_STREAM_TRACKED_CONTRACTS', 'NOT_SET')}")
         
-        config = create_config_v3()
+        config = create_config()
         
         logger.debug("Config created")
         logger.info(f"Config client_id: {config.client_id}")
@@ -223,16 +223,8 @@ def get_app_state():
         logger.info(f"Config tracked contracts: {len(getattr(config.storage, 'tracked_contracts', []))}")
         logger.debug("Config loading complete")
     else:
-        # Config already exists - let's force reload it to pick up current env vars
-        import os
-        logger.debug("Reloading existing config")
-        logger.info(f"Current IB_STREAM_ENABLE_BACKGROUND_STREAMING: {os.getenv('IB_STREAM_ENABLE_BACKGROUND_STREAMING', 'NOT_SET')}")
-        logger.info(f"Current config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
-        
-        # Force reload
-        config = create_config_v3()
-        logger.info(f"Reloaded config background streaming: {getattr(config.storage, 'enable_background_streaming', 'NOT_FOUND')}")
-        logger.debug("Config reload complete")
+        # Config already exists and cached - use existing config
+        logger.debug("Using cached configuration")
     
     return {
         'config': config,

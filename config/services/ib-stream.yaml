@@ -4,39 +4,38 @@
 service:
   name: ib-stream
   type: streaming
-  
-server:
-  host: 0.0.0.0
-  port: 8851
-  enable_cors: true
-  enable_websockets: true
-
-client:
-  id: 374  # Will be overridden by instance generation
-  
-streaming:
-  enable_background_streaming: false  # Disabled in development
-  tracked_contracts: []  # Empty for API-only development
+  server:
+    host: 0.0.0.0
+    port: 8851
+    enable_cors: true
+    enable_websockets: true
+  client:
+    id: 374  # Will be overridden by instance generation
+  streaming:
+    enable_background_streaming: false  # Disabled in development
+    tracked_contracts: []  # Empty for API-only development
   
 # Development overrides
 development:
-  server:
-    port: 8851
-  client:
-    id: 101
-  streaming:
-    enable_background_streaming: false
+  service:
+    server:
+      port: 8851
+    client:
+      id: 101
+    streaming:
+      enable_background_streaming: false
 
 # Production overrides  
 production:
-  server:
-    port: 8851
-  client:
-    id: 851
-  streaming:
-    enable_background_streaming: true
-    tracked_contracts:
-      - contract_id: 711280073
-        symbol: MNQ
-        tick_types: ["bid_ask", "last"]
-        buffer_hours: 24
+  service:
+    server:
+      port: 8851
+    client:
+      id: 851
+    streaming:
+      enable_background_streaming: true
+      tracked_contracts:
+        - contract_id: 711280073
+          symbol: MNQ
+          tick_types: ["bid_ask", "last"]
+          buffer_hours: 24

@@ -2,12 +2,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug IB Stream (Development)",
+            "name": "Debug IB Stream (Direct)",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/ib-stream/src/ib_stream/api_server.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/ib-stream/src",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/ib-util:${workspaceFolder}/ib-stream/src",
                 "IB_ENVIRONMENT": "development",

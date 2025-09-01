@@ -28,7 +28,17 @@ from .ws_schemas import (
 )
 
 logger = logging.getLogger(__name__)
-config = create_config()
+
+# Config will be lazy-loaded when needed to avoid module-level loading
+_ws_config = None
+
+def get_config():
+    """Lazy-load configuration to avoid module-level initialization"""
+    global _ws_config
+    if _ws_config is None:
+        from .config import create_config
+        _ws_config = create_config()
+    return _ws_config
 
 
 class WebSocketConnection:

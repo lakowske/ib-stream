@@ -40,31 +40,33 @@ def main():
     print()
     
     try:
-        # Import and start the API server
-        from ib_stream.api_server import create_app
-        
+        # Import and create the FastAPI app
         print("✓ Loading Configuration System v3...")
-        app = create_app()
+        
+        # Import the main app creation function
+        from ib_stream.api_server import create_app
+        server_instance = create_app()
+        
+        # Get the actual FastAPI app from the server instance
+        app = server_instance.app
         
         print("✓ Configuration loaded successfully")
+        print("✓ FastAPI app created")
         print("✓ Starting ib-stream API server...")
         print()
         print("🚀 Ready for debugging!")
         print("   • Set breakpoints in VS Code")
-        print("   • Use step-through debugging")
+        print("   • Use step-through debugging") 
         print("   • Inspect configuration objects")
         print("   • Debug TWS connection issues")
+        print("   • Server running on http://0.0.0.0:8774")
         print()
         
         # Start the server with debug-friendly settings
         import uvicorn
         
-        # Get server configuration
-        from ib_stream.config import create_config
-        config = create_config()
-        
         uvicorn.run(
-            app,
+            app,  # Now passing the actual FastAPI app
             host="0.0.0.0",
             port=8774,  # Use development port from instance config
             log_level="debug",
