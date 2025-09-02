@@ -23,6 +23,7 @@ class ConnectionConfig:
     client_id: int = 1
     host: str = "127.0.0.1"
     ports: List[int] = None
+    connection_timeout: float = 10.0
     
     def __post_init__(self):
         if self.ports is None:

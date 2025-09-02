@@ -1,11 +1,6 @@
 """
-Application lifecycle management for the IB Stream API - Unified Connection Architecture v2
-
-Key changes from v1:
-- Uses UnifiedConnectionManager instead of dual connections
-- Single client ID (no +1000 offset for background streams)  
-- Simplified startup/shutdown with unified recovery
-- BackgroundStreamManager v2 integration
+Application lifecycle management for the IB Stream API
+Handles startup, shutdown, and global state management
 """
 
 import logging
@@ -21,58 +16,50 @@ from .storage import MultiStorage
 from .storage.multi_storage_v3 import MultiStorageV3
 from .streaming_app import StreamingApp
 from .stream_manager import stream_manager
-from .background_stream_manager_v2 import BackgroundStreamManagerV2
-from .connection import UnifiedConnectionManager
+from .background_stream_manager import BackgroundStreamManager
 
 logger = logging.getLogger(__name__)
 
-# Global state - Unified Architecture
-config = None  # Configuration loaded in lifespan startup
-unified_connection_manager: Optional[UnifiedConnectionManager] = None  # Single connection manager
+# Global state
+config = None  # Will be loaded in lifespan startup
+tws_app: Optional[StreamingApp] = None
+tws_lock = threading.Lock()
 storage: Optional[MultiStorageV3] = None
-background_manager: Optional[BackgroundStreamManagerV2] = None
+background_manager: Optional[BackgroundStreamManager] = None
 active_streams = {}
 stream_lock = threading.Lock()
 
 
 def ensure_tws_connection() -> StreamingApp:
-    """
-    Ensure TWS connection is active - Unified Architecture Version
-    
-    Returns the StreamingApp instance from the unified connection manager.
-    This replaces the old pattern of creating separate connections.
-    """
-    global unified_connection_manager
-    
-    if unified_connection_manager is None:
-        msg = "Unified connection manager not initialized. Server startup may have failed."
-        raise HTTPException(status_code=503, detail=msg)
-    
-    if not unified_connection_manager.is_connected:
-        msg = "TWS connection not available. Please ensure IB Gateway is running with API enabled."
-        raise HTTPException(status_code=503, detail=msg)
-    
-    # Return the shared StreamingApp instance
-    return unified_connection_manager.streaming_app
+    """Ensure TWS connection is active"""
+    global tws_app
+
+    with tws_lock:
+        # Check if we already have a working connection
+        if tws_app is not None and tws_app.is_connected():
+            logger.debug("Using existing TWS connection")
+            return tws_app
+            
+        logger.info("Establishing TWS connection...")
+        tws_app = StreamingApp(json_output=True)
+        
+        if not tws_app.connect_and_start():
+            msg = "Unable to connect to TWS/Gateway. Please ensure it's running with API enabled."
+            raise HTTPException(status_code=503, detail=msg)
+
+        logger.info("TWS connection established successfully with client ID %d", tws_app.config.client_id)
+
+    return tws_app
 
 
 @asynccontextmanager
 async def lifespan(_):
-    """
-    Unified lifespan event handler for startup/shutdown
-    
-    Key improvements:
-    - Single UnifiedConnectionManager replaces dual connections
-    - BackgroundStreamManager v2 uses shared connection
-    - Simplified connection state management
-    - Enhanced recovery system
-    """
+    """Lifespan event handler for startup/shutdown"""
     # Startup - Load configuration with current environment variables
-    global config, unified_connection_manager, storage, background_manager
+    global config
+    config = create_config_v3()
     
-    config = create_config()
-    
-    logger.info("Starting IB Stream API Server with Unified Connection Architecture...")
+    logger.info("Starting IB Stream API Server...")
     logger.info("Configuration:")
     logger.info("  Client ID: %d", config.client_id)  
     logger.info("  Host: %s", config.host)
@@ -83,15 +70,8 @@ async def lifespan(_):
     else:
         logger.info("  Default Timeout: No timeout (unlimited)")
     
-    # Initialize unified connection manager
-    logger.info("Initializing unified connection manager...")
-    unified_connection_manager = UnifiedConnectionManager(
-        config=config,
-        enable_recovery=True  # Enable automatic recovery
-    )
-    logger.info("✅ Unified connection manager created with client ID %d", config.client_id)
-    
     # Initialize storage system
+    global storage
     if config.storage.enable_storage:
         logger.info("Initializing storage system...")
         logger.info("  Storage path: %s", config.storage.storage_base_path)
@@ -111,12 +91,12 @@ async def lifespan(_):
                 enable_metrics=config.storage.enable_metrics
             )
             await storage.start()
-            logger.info("✅ Storage system initialized successfully")
+            logger.info("Storage system initialized successfully")
             
             # Initialize stream_manager with storage and client stream storage config
             stream_manager.storage = storage
             stream_manager.enable_client_stream_storage = config.storage.enable_client_stream_storage
-            logger.info("✅ Stream manager configured with storage, client stream storage: %s", 
+            logger.info("Stream manager configured with storage, client stream storage: %s", 
                        "enabled" if config.storage.enable_client_stream_storage else "disabled")
             
         except Exception as e:
@@ -128,16 +108,16 @@ async def lifespan(_):
         # Still configure stream_manager with client stream storage setting
         stream_manager.enable_client_stream_storage = config.storage.enable_client_stream_storage
 
-    # Start unified connection manager
-    logger.info("Starting unified connection manager...")
+    logger.info("Attempting to establish TWS connection...")
     try:
-        await unified_connection_manager.start()
-        logger.info("✅ Unified connection established successfully")
+        ensure_tws_connection()
+        logger.info("TWS connection established successfully")
     except Exception as e:
-        logger.warning("Failed to establish initial connection: %s", e)
+        logger.warning("Failed to establish initial TWS connection: %s", e)
         logger.info("Will attempt to connect on first streaming request")
     
-    # Initialize background streaming for tracked contracts using unified architecture
+    # Initialize background streaming for tracked contracts
+    global background_manager
     if config.storage.tracked_contracts:
         logger.info("Initializing background streaming for %d tracked contracts...", 
                    len(config.storage.tracked_contracts))
@@ -150,25 +130,20 @@ async def lifespan(_):
                 15  # Default to 15 minutes
             )
             
-            # Create BackgroundStreamManager v2 with shared connection
-            background_manager = BackgroundStreamManagerV2(
+            background_manager = BackgroundStreamManager(
                 tracked_contracts=config.storage.tracked_contracts,
-                connection_manager=unified_connection_manager,  # Use shared connection!
-                staleness_threshold_minutes=staleness_threshold
+                reconnect_delay=config.storage.background_stream_reconnect_delay,
+                staleness_threshold_minutes=staleness_threshold,
+                config=config  # Pass config to avoid recreating it on every connection
             )
-            
-            # Start background streaming
             await background_manager.start()
-            logger.info("✅ Background streaming started successfully")
+            logger.info("Background streaming started successfully")
             
             # Log tracked contracts
             for contract in config.storage.tracked_contracts:
-                logger.info("  📊 Tracking contract %d (%s): %s, buffer=%dh", 
+                logger.info("  Tracking contract %d (%s): %s, buffer=%dh", 
                            contract.contract_id, contract.symbol, 
                            contract.tick_types, contract.buffer_hours)
-            
-            logger.info("✅ Unified architecture: Single client ID %d serving all streams", 
-                       config.client_id)
             
         except Exception as e:
             logger.error("Failed to start background streaming: %s", e)
@@ -176,19 +151,18 @@ async def lifespan(_):
     else:
         logger.info("No tracked contracts configured - background streaming disabled")
 
-    logger.info("🚀 IB Stream API Server startup complete - Unified Architecture Active")
-    
     yield
 
-    # Shutdown - Unified Architecture Cleanup
+    # Shutdown
     logger.info("Shutting down IB Stream API Server...")
+    global tws_app
     
     # Stop background streaming
     if background_manager:
         logger.info("Stopping background streaming...")
         try:
             await background_manager.stop()
-            logger.info("✅ Background streaming stopped")
+            logger.info("Background streaming stopped")
         except Exception as e:
             logger.error("Error stopping background streaming: %s", e)
     
@@ -197,45 +171,38 @@ async def lifespan(_):
         logger.info("Stopping storage system...")
         try:
             await storage.stop()
-            logger.info("✅ Storage system stopped")
+            logger.info("Storage system stopped")
         except Exception as e:
             logger.error("Error stopping storage system: %s", e)
     
-    # Stop unified connection manager (handles all stream cleanup)
-    if unified_connection_manager:
-        logger.info("Stopping unified connection manager...")
-        try:
-            await unified_connection_manager.stop()
-            logger.info("✅ Unified connection manager stopped")
-            logger.info("✅ All streams cancelled and connection closed")
-        except Exception as e:
-            logger.error("Error stopping unified connection manager: %s", e)
+    if tws_app and tws_app.is_connected():
+        # Stop all active streams
+        with stream_lock:
+            for stream_id in list(active_streams.keys()):
+                try:
+                    tws_app.cancelTickByTickData(stream_id)
+                except Exception as e:
+                    logger.warning("Error cancelling stream %s: %s", stream_id, e)
+            active_streams.clear()
 
-    logger.info("✅ IB Stream API Server shutdown complete")
+        tws_app.disconnect_and_stop()
+        logger.info("TWS connection closed")
 
 
-def update_global_state(storage_obj=None, background_manager_obj=None, connection_manager_obj=None):
-    """
-    Update global state variables for health endpoints
-    
-    Updated for unified architecture - now includes connection_manager
-    """
-    global storage, background_manager, unified_connection_manager
+def update_global_state(storage_obj=None, background_manager_obj=None, tws_app_obj=None):
+    """Update global state variables for health endpoints"""
+    global storage, background_manager, tws_app
     
     if storage_obj is not None:
         storage = storage_obj
     if background_manager_obj is not None:
         background_manager = background_manager_obj  
-    if connection_manager_obj is not None:
-        unified_connection_manager = connection_manager_obj
+    if tws_app_obj is not None:
+        tws_app = tws_app_obj
 
 
 def get_app_state():
-    """
-    Get current application state for dependency injection
-    
-    Updated for unified architecture
-    """
+    """Get current application state for dependency injection"""
     # Ensure config is loaded if not already done
     global config
     if config is None:
@@ -260,33 +227,12 @@ def get_app_state():
         # Config already exists and cached - use existing config
         logger.debug("Using cached configuration")
     
-    # Get StreamingApp from unified connection manager
-    streaming_app = None
-    if unified_connection_manager and unified_connection_manager.is_connected:
-        streaming_app = unified_connection_manager.streaming_app
-    
     return {
         'config': config,
         'storage': storage,
         'background_manager': background_manager,
-        'unified_connection_manager': unified_connection_manager,  # New: unified manager
-        'tws_app': streaming_app,  # Legacy compatibility
+        'tws_app': tws_app,
         'active_streams': active_streams,
         'stream_lock': stream_lock,
         'ensure_tws_connection': ensure_tws_connection
     }
-
-
-# Legacy compatibility functions for gradual migration
-
-def get_legacy_tws_app():
-    """Legacy compatibility: return StreamingApp from unified manager"""
-    if unified_connection_manager and unified_connection_manager.is_connected:
-        return unified_connection_manager.streaming_app
-    return None
-
-
-def is_connection_healthy() -> bool:
-    """Check if unified connection is healthy"""
-    return (unified_connection_manager is not None and 
-            unified_connection_manager.is_connected)

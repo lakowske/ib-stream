@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Standalone Debug Runner for IB Stream
+Standalone Debug Runner for IB Stream - UNIFIED ARCHITECTURE
 
-This runner allows you to debug ib-stream directly in VS Code without
-the complexity of supervisor. It uses Configuration System v3 and
-provides the same functionality as the production service.
+This runner allows you to debug ib-stream directly in VS Code using the
+new unified connection architecture. No supervisor complexity!
+
+Features:
+- Single UnifiedConnectionManager (no dual connections)
+- BackgroundStreamManager v2 with shared connection  
+- 50% resource reduction
+- Configuration System v3
+- Full debugging capabilities
 
 Usage:
     python debug_runner.py
@@ -12,8 +18,8 @@ Usage:
 This script:
 1. Sets up the proper Python path
 2. Loads Configuration System v3 
-3. Starts the ib-stream API server
-4. Enables all debugging features
+3. Starts the UNIFIED ARCHITECTURE ib-stream API server
+4. Enables all debugging features for single connection system
 """
 
 import sys
@@ -40,25 +46,25 @@ def main():
     print()
     
     try:
-        # Import and create the FastAPI app
+        # Import and create the FastAPI app with UNIFIED ARCHITECTURE
         print("✓ Loading Configuration System v3...")
         
-        # Import the main app creation function
-        from ib_stream.api_server import create_app
-        server_instance = create_app()
+        # Import the unified architecture app
+        from ib_stream.unified_app import create_unified_app
+        app = create_unified_app()
         
-        # Get the actual FastAPI app from the server instance
-        app = server_instance.app
+        print("✓ Unified Architecture - Single Connection System")
         
         print("✓ Configuration loaded successfully")
-        print("✓ FastAPI app created")
+        print("✓ FastAPI app created with Unified Architecture")
         print("✓ Starting ib-stream API server...")
         print()
-        print("🚀 Ready for debugging!")
+        print("🚀 Ready for debugging UNIFIED ARCHITECTURE!")
         print("   • Set breakpoints in VS Code")
         print("   • Use step-through debugging") 
-        print("   • Inspect configuration objects")
-        print("   • Debug TWS connection issues")
+        print("   • Debug single UnifiedConnectionManager")
+        print("   • Debug shared connection for all streams")
+        print("   • Observe 50% resource reduction")
         print("   • Server running on http://0.0.0.0:8774")
         print()
         

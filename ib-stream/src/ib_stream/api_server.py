@@ -148,7 +148,8 @@ class IBStreamAPIServer(BaseAPIServer):
                 self.background_manager = BackgroundStreamManager(
                     tracked_contracts=self.stream_config.storage.tracked_contracts,
                     reconnect_delay=self.stream_config.storage.background_stream_reconnect_delay,
-                    staleness_threshold_minutes=staleness_threshold
+                    staleness_threshold_minutes=staleness_threshold,
+                    config=self.stream_config  # Pass config to avoid recreating it on every connection
                 )
                 await self.background_manager.start()
                 self.logger.info("Background streaming started successfully")
@@ -172,12 +173,12 @@ class IBStreamAPIServer(BaseAPIServer):
             'tws_app': self.tws_app
         })
         
-        # Also update global variables for health endpoints
+        # Also update global variables for health endpoints (unified architecture)
         from .app_lifecycle import update_global_state
+        # Note: In unified architecture, we don't pass tws_app separately since it's part of connection_manager
         update_global_state(
             storage_obj=self.storage,
-            background_manager_obj=self.background_manager,
-            tws_app_obj=self.tws_app
+            background_manager_obj=self.background_manager
         )
     
     async def shutdown(self):
@@ -358,7 +359,7 @@ class IBStreamAPIServer(BaseAPIServer):
                         "main_service_connected": main_tws_connected,
                         "background_streaming_connected": background_tws_connected,
                         "main_client_id": self.stream_config.client_id,
-                        "background_client_id": self.stream_config.client_id + 1000 if background_manager else None
+                        "background_client_id": self.stream_config.client_id if background_manager else None  # Unified architecture: same client ID
                     },
                     "active_streams": active_stream_count,
                     "background_streams": background_stream_count,
