@@ -46,6 +46,11 @@ def main():
     print()
     
     try:
+        # Configure logging for debug mode BEFORE creating the app
+        print("✓ Setting up debug logging...")
+        from ib_util.logging_config import configure_service_logging
+        configure_service_logging("ib-stream", verbose=True)
+        
         # Import and create the FastAPI app with UNIFIED ARCHITECTURE
         print("✓ Loading Configuration System v3...")
         
