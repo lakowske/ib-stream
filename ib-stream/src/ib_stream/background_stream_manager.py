@@ -28,9 +28,11 @@ class BackgroundStreamManager:
     
     def __init__(self, tracked_contracts: List[TrackedContract], 
                  reconnect_delay: int = 30,
-                 staleness_threshold_minutes: int = 15):
+                 staleness_threshold_minutes: int = 15,
+                 config=None):
         self.tracked_contracts = {c.contract_id: c for c in tracked_contracts if c.enabled}
         self.reconnect_delay = reconnect_delay
+        self.config = config  # Store config to avoid recreating it
         
         # Active background streams
         self.active_streams: Dict[int, Dict[str, int]] = {}  # contract_id -> {tick_type: request_id}
@@ -393,8 +395,14 @@ class BackgroundStreamManager:
                 self.tws_app = None
             
             # Create StreamingApp with background-specific client ID
-            # Use the same connection configuration as the main service
-            main_config = create_config()
+            # Use the stored configuration (passed during initialization)
+            if self.config is None:
+                # Fallback: load config if not provided (for backward compatibility)
+                from .config import create_config
+                main_config = create_config()
+                logger.warning("BackgroundStreamManager created without config - loading on demand (inefficient)")
+            else:
+                main_config = self.config
             
             # Use a different client ID for background streaming to avoid conflicts
             background_config = ConnectionConfig(
