@@ -103,13 +103,20 @@ def create_service_composition_app(existing_orchestrator=None) -> FastAPI:
     )
     
     # Setup endpoints with service integration
-    # Note: We'll pass the orchestrator/registry to endpoints instead of raw config
+    # V3 endpoints use ServiceRegistry instead of raw config
     setup_health_endpoints_v3(app)
-    setup_buffer_endpoints_v3(app)
+    
+    # Import and setup V3 endpoints
+    from .endpoints.streaming_v3 import setup_streaming_endpoints_v3
+    from .endpoints.management_v3 import setup_management_endpoints_v3
+    from .endpoints.monitoring_v3 import setup_monitoring_endpoints_v3
+    
     setup_streaming_endpoints_v3(app)
-    setup_websocket_endpoints_v3(app)
     setup_management_endpoints_v3(app)
-    setup_v3_endpoints_v3(app)
+    setup_monitoring_endpoints_v3(app)
+    
+    # Legacy endpoint compatibility (placeholder)
+    setup_websocket_endpoints_v3(app)
     
     @app.get("/")
     async def root():
@@ -135,11 +142,24 @@ def create_service_composition_app(existing_orchestrator=None) -> FastAPI:
             "endpoints": {
                 "/health": "Health check with service composition status",
                 "/services/status": "All service status from ServiceRegistry",
-                "/stream/info": "Streaming API documentation",
-                "/v2/stream/{contract_id}/buffer": "Stream historical buffer + live data (SSE)",
-                "/v2/stream/{contract_id}/live/{tick_type}": "Stream specific tick type data (SSE)", 
-                "/background/health/summary": "Background stream health summary",
-                "ws://host/v2/ws/stream": "WebSocket streaming endpoint"
+                
+                # V3 Service Composition Endpoints
+                "/v3/stream/{contract_id}/buffer": "Buffer + live streaming with Service Composition",
+                "/v3/stream/{contract_id}/live/{tick_type}": "Live streaming with Service Composition",
+                "/v3/stream/info": "Stream information with service status",
+                
+                "/v3/background/health/summary": "Background health via ServiceRegistry",
+                "/v3/background/health/detailed": "Detailed background health",
+                "/v3/background/health/{contract_id}": "Contract-specific health",
+                "/v3/services/metrics": "Service metrics and monitoring",
+                
+                # Advanced Monitoring Dashboard
+                "/v3/monitoring/dashboard": "Comprehensive monitoring dashboard",
+                "/v3/monitoring/metrics": "Raw metrics for external systems", 
+                "/v3/monitoring/performance": "Performance analysis and comparison",
+                "/v3/monitoring/services/{service_name}": "Detailed service monitoring",
+                "/v3/monitoring/comparison": "Architecture comparison showcase",
+                "/v3/monitoring/health/realtime": "Real-time health monitoring"
             }
         }
     

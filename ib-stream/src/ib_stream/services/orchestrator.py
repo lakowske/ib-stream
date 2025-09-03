@@ -15,6 +15,7 @@ from .event_bus import EventBus, EventType, Event
 from .service_registry import ServiceRegistry, ServiceInterface
 from .ib_service import IBService
 from .storage_service import StorageService
+from .metrics_collector import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,11 @@ class ServiceOrchestrator:
         self.event_bus = EventBus()
         self.service_registry = ServiceRegistry()
         self.services: Dict[str, ServiceInterface] = {}
+        self.metrics_collector = None  # Will be initialized after event_bus setup
         
         self._logger = logging.getLogger(f"{__name__}.ServiceOrchestrator")
         self._setup_event_logging()
+        self._setup_metrics_collection()
     
     def _setup_event_logging(self):
         """Set up event bus logging for debugging"""
@@ -47,6 +50,11 @@ class ServiceOrchestrator:
         # Subscribe to key events for logging
         for event_type in [EventType.SERVICE_STARTED, EventType.SERVICE_STOPPED, EventType.SERVICE_ERROR]:
             self.event_bus.subscribe(event_type, log_event)
+    
+    def _setup_metrics_collection(self):
+        """Set up advanced metrics collection"""
+        self.metrics_collector = MetricsCollector(self.event_bus)
+        self._logger.info("Advanced metrics collection initialized")
     
     async def start(self, services_to_start: Optional[List[str]] = None) -> None:
         """
@@ -164,3 +172,21 @@ class ServiceOrchestrator:
                 return False
         
         return True
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get comprehensive metrics from the metrics collector"""
+        if not self.metrics_collector:
+            return {"error": "Metrics collector not initialized"}
+        
+        return {
+            "global_metrics": self.metrics_collector.get_global_metrics(),
+            "service_metrics": self.metrics_collector.get_all_service_metrics(),
+            "performance_summary": self.metrics_collector.get_performance_summary()
+        }
+    
+    def get_service_metrics(self, service_name: str) -> Optional[Dict[str, Any]]:
+        """Get metrics for a specific service"""
+        if not self.metrics_collector:
+            return None
+        
+        return self.metrics_collector.get_service_metrics(service_name)
