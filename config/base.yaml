@@ -17,7 +17,7 @@ gateway:
 # Storage configuration  
 storage:
   enabled: true
-  base_path: storage-dev
+  base_path: storage
   formats:
     v2_json: false
     v2_protobuf: false  

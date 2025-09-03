@@ -8,12 +8,12 @@ gateway:
   host: 192.168.0.60  # Remote gateway for development
 
 storage:
-  base_path: storage-dev
+  base_path: storage
   formats:
-    v2_json: true      # Enable for development testing
-    v2_protobuf: false
-    v3_json: true
-    v3_protobuf: false  # Disable to reduce disk usage in dev
+    v2_json: false     # Disabled - using V3 only
+    v2_protobuf: false # Disabled - using V3 only
+    v3_json: true      # Enabled
+    v3_protobuf: true  # Enabled
   enable_postgres: false  # No database in development
   
 logging:

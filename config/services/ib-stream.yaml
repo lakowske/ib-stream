@@ -12,8 +12,12 @@ service:
   client:
     id: 374  # Will be overridden by instance generation
   streaming:
-    enable_background_streaming: false  # Disabled in development
-    tracked_contracts: []  # Empty for API-only development
+    enable_background_streaming: true   # Enabled for data collection
+    tracked_contracts:
+      - contract_id: 711280073
+        symbol: MNQ
+        tick_types: ["bid_ask", "last"]
+        buffer_hours: 24
   
 # Development overrides
 development:
@@ -23,7 +27,12 @@ development:
     client:
       id: 101
     streaming:
-      enable_background_streaming: false
+      enable_background_streaming: true
+      tracked_contracts:
+        - contract_id: 711280073
+          symbol: MNQ
+          tick_types: ["bid_ask", "last"]
+          buffer_hours: 24
 
 # Production overrides  
 production:

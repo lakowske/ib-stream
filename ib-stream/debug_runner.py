@@ -81,30 +81,19 @@ async def run_debug_mode():
     ServiceOrchestrator = get_orchestrator()
     orchestrator = ServiceOrchestrator()
     
-    # Start IB and Storage services (FastAPI will be separate)
+    # Start IB and Storage services 
     print("Starting services: IB API + Storage")
     await orchestrator.start(['ib', 'storage'])
     
-    # Create FastAPI app with service integration
-    @asynccontextmanager
-    async def lifespan(_):
-        # Services already started by orchestrator
-        print("✅ FastAPI lifespan started - services already running")
-        yield
-        # Services will be stopped by orchestrator
-        print("✅ FastAPI lifespan finished")
+    # Create FastAPI app that uses our existing orchestrator
+    from ib_stream.app_v3 import create_service_composition_app
+    app = create_service_composition_app(existing_orchestrator=orchestrator)
     
-    from fastapi import FastAPI
-    app = FastAPI(lifespan=lifespan, title="IB Stream API", version="3.0")
-    
-    # Add basic endpoint that uses the orchestrator services
-    @app.get("/health")
-    async def health():
-        return orchestrator.get_all_status()
-    
-    @app.get("/")
-    async def root():
-        return {"message": "IB Stream API - Service Orchestration Architecture", "version": "3.0"}
+    print("✅ Service Composition FastAPI app created")
+    print("   • Uses existing ServiceOrchestrator")
+    print("   • No duplicate service creation") 
+    print("   • Single configuration loading")
+    print("   • Clean service separation")
     
     # Start FastAPI server
     print("✅ Services started successfully")
